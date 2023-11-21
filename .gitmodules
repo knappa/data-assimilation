@@ -1,0 +1,3 @@
+[submodule "kalman/jenner-covid/COVID19-Virtual-Trial-PLOS-Pathogens"]
+	path = kalman/jenner-covid/COVID19-Virtual-Trial-PLOS-Pathogens
+	url = git@github.com:adriannejnner/COVID19-Virtual-Trial-PLOS-Pathogens.git
