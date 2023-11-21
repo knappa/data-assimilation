@@ -10,7 +10,9 @@ https://github.com/adriannejnner/COVID19-Virtual-Trial-PLOS-Pathogens
 
 Currently in active development, so these descriptions may be unstable and change without warning.
 
-Developed using Julia 1.9.4. Assuming the `julia` executable is in your path, there are three scripts intended for direct use.
+Developed using [Julia 1.9.4](https://julialang.org/downloads/). You may find [juliaup](https://github.com/JuliaLang/juliaup) useful for keeping track of Julia versions.
+
+Assuming the `julia` executable is in your path, there are three scripts intended for direct use.
 
 ```
 julia personalize_patient_data.jl <patient index>
