@@ -22,7 +22,7 @@ include("dist.jl")
 
 ################################################################################
 
-const patient_idx = 2 # parse(Int64, ARGS[1])
+const patient_idx = parse(Int64, ARGS[1])
 const num_samples = 10_000
 const dt = 0.5
 
