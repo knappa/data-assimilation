@@ -1,3 +1,9 @@
 [submodule "kalman/jenner-covid/COVID19-Virtual-Trial-PLOS-Pathogens"]
 	path = kalman/jenner-covid/COVID19-Virtual-Trial-PLOS-Pathogens
 	url = git@github.com:adriannejnner/COVID19-Virtual-Trial-PLOS-Pathogens.git
+[submodule "kalman/an-cockrell-abm/an-cockrell"]
+	path = kalman/an-cockrell-abm/an-cockrell
+	url = git@github.com:knappa/an-cockrell.git
+[submodule "kalman/wolf-sheep-grass-abm/wolf-sheep-grass"]
+	path = kalman/wolf-sheep-grass-abm/wolf-sheep-grass
+	url = git@github.com:knappa/wolf-sheep-grass.git
