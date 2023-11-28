@@ -10,7 +10,7 @@ TIME_SPAN = 1000
 SAMPLE_INTERVAL = 50  # how often to make measurements
 ENSEMBLE_SIZE = 50
 UNIFIED_STATE_SPACE_DIMENSION = 8  # 3 macrostates and 5 parameters
-OBSERVABLE = "wolves+grass"  # wolves, sheep, grass, wolves+grass
+OBSERVABLE = "grass" # "wolves+grass"  # wolves, sheep, grass, wolves+grass
 RESAMPLE_MODELS = False
 
 # statistical parameters
