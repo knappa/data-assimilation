@@ -17,20 +17,20 @@ done
 
 for i in $(seq -f "%03g" 0 100)
 do
-  python ekf.py --prefix $i-wolf-grass --measurements wolves+grass
+  python ekf.py --prefix $i-wolfgrass --measurements wolves+grass
 done
 
 for i in $(seq -f "%03g" 0 100)
 do
-  python ekf.py --prefix $i-wolf-sheep --measurements wolves+sheep
+  python ekf.py --prefix $i-wolfsheep --measurements wolves+sheep
 done
 
 for i in $(seq -f "%03g" 0 100)
 do
-  python ekf.py --prefix $i-sheep-grass --measurements sheep+grass
+  python ekf.py --prefix $i-sheepgrass --measurements sheep+grass
 done
 
 for i in $(seq -f "%03g" 0 100)
 do
-  python ekf.py --prefix $i-wolf-sheep-grass --measurements wolves+sheep+grass
+  python ekf.py --prefix $i-wolfsheepgrass --measurements wolves+sheep+grass
 done

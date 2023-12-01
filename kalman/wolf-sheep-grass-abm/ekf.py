@@ -4,29 +4,45 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import multivariate_normal
 from wolf_sheep_grass import WolfSheepGrassModel
+import sys
 
 ################################################################################
-parser = argparse.ArgumentParser()
 
-parser.add_argument("--prefix", type=str, default="", help="output file prefix")
+if hasattr(sys, "ps1"):
+    # interactive mode
+    args = object()
+else:
+    parser = argparse.ArgumentParser()
 
-parser.add_argument(
-    "--measurements",
-    type=str,
-    choices=[
-        "wolves",
-        "sheep",
-        "grass",
-        "wolves+grass",
-        "sheep+grass",
-        "wolves+sheep",
-        "wolves+sheep+grass",
-    ],
-    default="grass",
-    help="which things to measure",
-)
+    parser.add_argument("--prefix", type=str, default="", help="output file prefix")
 
-args = parser.parse_args()
+    parser.add_argument(
+        "--measurements",
+        type=str,
+        choices=[
+            "wolves",
+            "sheep",
+            "grass",
+            "wolves+grass",
+            "sheep+grass",
+            "wolves+sheep",
+            "wolves+sheep+grass",
+        ],
+        default="grass",
+        help="which things to measure",
+    )
+
+    parser.add_argument(
+        "--matchmaker",
+        help="try to match resampled macrostates with microstate "
+        "models to minimize change magnitude",
+        type=str,
+        choices=["yes", "no"],
+        required=True,
+    )
+
+    args = parser.parse_args()
+
 
 ################################################################################
 # constants
@@ -37,13 +53,19 @@ TIME_SPAN = 1000
 SAMPLE_INTERVAL = 50  # how often to make measurements
 ENSEMBLE_SIZE = 50
 UNIFIED_STATE_SPACE_DIMENSION = 8  # 3 macrostates and 5 parameters
-OBSERVABLE = (
-    "grass" if not args.measurements else args.measurements
-)  # "wolves+grass"  # wolves, sheep, grass, wolves+grass
+OBSERVABLE = "grass" if not hasattr(args, "measurements") else args.measurements
+
 RESAMPLE_MODELS = False
+
+# if we are altering the models (as opposed to resampling) try to match the
+# models to minimize the changes necessary.
+MODEL_MATCHMAKER = True if not hasattr(args, "matchmaker") else (args.matchmaker == "yes")
+
+# have the models' parameters do a random walk over time (should help
+# with covariance starvation)
 PARAMETER_RANDOM_WALK = True
 
-FILE_PREFIX = "" if not args.prefix else args.prefix + "-"
+FILE_PREFIX = "" if not hasattr(args, "prefix") else args.prefix + "-"
 
 ################################################################################
 # statistical parameters
@@ -162,7 +184,7 @@ def model_ensemble_from(means, covariances):
     :return:
     """
     mdl_ensemble = []
-    distribution = multivariate_normal(mean=means, cov=covariances)
+    distribution = multivariate_normal(mean=means, cov=covariances, allow_singular=True)
     for _ in range(ENSEMBLE_SIZE):
         (
             en_init_wolves,
@@ -318,6 +340,7 @@ cov_matrix[time, :, :] = np.cov(initial_macro_data, rowvar=False)
 cycle = 0
 while time < TIME_SPAN:
     cycle += 1
+    print(f" *** {cycle=} *** ")
     # advance ensemble of models
     for _ in range(SAMPLE_INTERVAL):
         for model in model_ensemble:
@@ -331,7 +354,6 @@ while time < TIME_SPAN:
                         cov=np.diag(0.01 * np.ones_like(macrostate)),
                     ).rvs()
                 )
-
                 modify_model(model, random_walk_macrostate, ignore_state_vars=True)
         time += 1
         macro_data = np.array([model_macro_data(model) for model in model_ensemble])
@@ -468,25 +490,19 @@ while time < TIME_SPAN:
             H = np.zeros((2, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 0] = 1.0  # observe wolves
             H[1, 2] = 1.0  # observe grass
-            observation = np.array(
-                [vp_wolf_counts[time], vp_grass_counts[time]], dtype=np.float64
-            )
+            observation = np.array([vp_wolf_counts[time], vp_grass_counts[time]], dtype=np.float64)
         case "sheep+grass":
             R = np.diag([2.0, 1.0])
             H = np.zeros((2, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 1] = 1.0  # observe sheep
             H[1, 2] = 1.0  # observe grass
-            observation = np.array(
-                [vp_sheep_counts[time], vp_grass_counts[time]], dtype=np.float64
-            )
+            observation = np.array([vp_sheep_counts[time], vp_grass_counts[time]], dtype=np.float64)
         case "wolves+sheep":
             R = np.diag([2.0, 2.0])
             H = np.zeros((2, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 0] = 1.0  # observe wolves
             H[1, 1] = 1.0  # observe sheep
-            observation = np.array(
-                [vp_wolf_counts[time], vp_sheep_counts[time]], dtype=np.float64
-            )
+            observation = np.array([vp_wolf_counts[time], vp_sheep_counts[time]], dtype=np.float64)
         case "wolves+sheep+grass":
             R = np.diag([2.0, 2.0, 1.0])
             H = np.zeros((3, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
@@ -512,9 +528,7 @@ while time < TIME_SPAN:
     eigenvalues, eigenvectors = np.linalg.eig(cov_matrix[time, :, :])
     eigenvalues = np.real(eigenvalues)  # just making sure
     eigenvectors = np.real(eigenvectors)  # just making sure
-    cov_matrix[time, :, :] = (
-        eigenvectors @ np.diag(np.maximum(1e-6, eigenvalues)) @ eigenvectors.T
-    )
+    cov_matrix[time, :, :] = eigenvectors @ np.diag(np.maximum(1e-6, eigenvalues)) @ eigenvectors.T
     cov_matrix[time, :, :] = (cov_matrix[time, :, :] + cov_matrix[time, :, :].T) / 2.0
 
     # recreate ensemble
@@ -522,11 +536,79 @@ while time < TIME_SPAN:
         # create an entirely new set of model instances sampled from KF-learned distribution
         model_ensemble = model_ensemble_from(mean_vec[time, :], cov_matrix[time, :, :])
     else:
-        # sample from KF-learned dist and modify existing models to fit
-        dist = multivariate_normal(mean=mean_vec[time, :], cov=cov_matrix[time, :, :])
-        for model in model_ensemble:
-            state = dist.rvs()
-            modify_model(model, state)
+        dist = multivariate_normal(
+            mean=mean_vec[time, :], cov=cov_matrix[time, :, :], allow_singular=True
+        )
+        if MODEL_MATCHMAKER:
+            new_sample = dist.rvs(size=ENSEMBLE_SIZE)
+            # Gale-Shapely matching algorithm to try and pair up the models and these new samples
+
+            # fill out preference lists for the models
+            prefs = np.zeros((ENSEMBLE_SIZE, ENSEMBLE_SIZE), dtype=np.int64)
+            for idx in range(ENSEMBLE_SIZE):
+                # noinspection PyUnboundLocalVariable
+                dists = np.linalg.norm(new_sample - macro_data[idx], axis=1)
+                prefs[idx, :] = np.argsort(dists)
+
+            # arrays to record pairings
+            model_to_sample_pairing = np.full(ENSEMBLE_SIZE, -1, dtype=np.int64)
+            sample_to_model_pairing = np.full(ENSEMBLE_SIZE, -1, dtype=np.int64)
+
+            all_paired = False
+            while not all_paired:
+                all_paired = True
+                for model_idx in range(ENSEMBLE_SIZE):
+                    if model_to_sample_pairing[model_idx] != -1:
+                        # skip already paired models
+                        continue
+                    # found an unpaired model, find the first thing not yet
+                    # checked on its preference list
+                    min_pref_idx = np.argmax(prefs[model_idx, :] >= 0)
+                    for pref_idx in range(min_pref_idx, ENSEMBLE_SIZE):
+                        possible_sample_pair = prefs[model_idx, pref_idx]
+                        competitor_model_idx = sample_to_model_pairing[possible_sample_pair]
+                        if competitor_model_idx == -1:
+                            # if the sample is unpaired, pair the two
+                            sample_to_model_pairing[possible_sample_pair] = model_idx
+                            model_to_sample_pairing[model_idx] = possible_sample_pair
+                            # erase this possibility for future pairings
+                            prefs[model_idx, pref_idx] = -1
+                            break  # stop looking now
+                        else:
+                            # compare preferences
+                            established_pair_dist = np.linalg.norm(
+                                macro_data[competitor_model_idx, :]
+                                - new_sample[possible_sample_pair, :]
+                            )
+                            proposed_pair_dist = np.linalg.norm(
+                                macro_data[model_idx, :] - new_sample[possible_sample_pair, :]
+                            )
+                            if proposed_pair_dist < established_pair_dist:
+                                model_to_sample_pairing[
+                                    competitor_model_idx
+                                ] = -1  # free the competitor
+                                all_paired = False
+                                # make new pair
+                                sample_to_model_pairing[possible_sample_pair] = model_idx
+                                model_to_sample_pairing[model_idx] = possible_sample_pair
+                                # erase this possibility for future pairings
+                                prefs[model_idx, pref_idx] = -1
+                                break  # stop looking now
+                            else:
+                                prefs[model_idx, pref_idx] = -1  # this one didn't work
+                                continue
+
+            # now do the model modifications
+            for model_idx in range(ENSEMBLE_SIZE):
+                modify_model(
+                    model_ensemble[model_idx],
+                    new_sample[model_to_sample_pairing[model_idx], :],
+                )
+        else:
+            # sample from KF-learned dist and modify existing models to fit
+            for model in model_ensemble:
+                state = dist.rvs()
+                modify_model(model, state)
 
 ################################################################################
 
@@ -544,9 +626,7 @@ vp_full_trajectory = np.array(
 ).T
 
 delta_full = mean_vec - vp_full_trajectory
-surprisal_full = np.einsum(
-    "ij,ij->i", delta_full, np.linalg.solve(cov_matrix, delta_full)
-)
+surprisal_full = np.einsum("ij,ij->i", delta_full, np.linalg.solve(cov_matrix, delta_full))
 mean_surprisal_full = np.mean(surprisal_full)
 
 vp_state_trajectory = np.array(
@@ -625,9 +705,7 @@ for idx, state_var_name in enumerate(["wolf", "sheep", "grass"]):
     axs[idx].legend()
 axs[3].set_title("surprisal")
 axs[3].plot(surprisal_state, label="state surprisal")
-axs[3].plot(
-    [0, TIME_SPAN + 1], [mean_surprisal_state, mean_surprisal_state], ":", color="black"
-)
+axs[3].plot([0, TIME_SPAN + 1], [mean_surprisal_state, mean_surprisal_state], ":", color="black")
 fig.tight_layout()
 fig.savefig(FILE_PREFIX + f"match.pdf")
 plt.close(fig)
