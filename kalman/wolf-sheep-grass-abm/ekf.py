@@ -2,18 +2,48 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import multivariate_normal
 from wolf_sheep_grass import WolfSheepGrassModel
+import sys
+import argparse
 
+
+################################################################################
+parser = argparse.ArgumentParser()
+
+parser.add_argument("--prefix", type=str, default="", help="output file prefix")
+
+parser.add_argument(
+    "--measurements",
+    type=str,
+    choices=["wolves", "sheep", "grass", "wolves+grass"],
+    default="grass",
+    help="which things to measure",
+)
+
+# parser.add_argument("--extra-graphsprefix", type=str, default="", help="output file prefix")
+
+args = parser.parse_args()
+
+
+################################################################################
 # constants
+
 GRID_WIDTH = 51
 GRID_HEIGHT = 51
 TIME_SPAN = 1000
 SAMPLE_INTERVAL = 50  # how often to make measurements
 ENSEMBLE_SIZE = 50
 UNIFIED_STATE_SPACE_DIMENSION = 8  # 3 macrostates and 5 parameters
-OBSERVABLE = "grass" # "wolves+grass"  # wolves, sheep, grass, wolves+grass
+OBSERVABLE = (
+    "grass" if not args.measurements else args.measurements
+)  # "wolves+grass"  # wolves, sheep, grass, wolves+grass
 RESAMPLE_MODELS = False
+PARAMETER_RANDOM_WALK = True
 
+FILE_PREFIX = "" if not args.prefix else args.prefix + "-"
+
+################################################################################
 # statistical parameters
+
 mean_init_wolves = 50  # state variable (int valued)
 std_init_wolves = 5  # expected to be <= sqrt(50) ~= 7
 mean_init_sheep = 100  # state variable (int valued)
@@ -60,6 +90,9 @@ cov_matrix = np.diag(
     ** 2
 )
 
+################################################################################
+# sample a virtual patient
+
 # sampled virtual patient parameters
 (
     vp_init_wolves,
@@ -100,14 +133,29 @@ for t in range(1, TIME_SPAN + 1):
     vp_sheep_counts[t] = virtual_patient_model.num_sheep
     vp_grass_counts[t] = np.sum(virtual_patient_model.grass)
 
-plt.plot(vp_wolf_counts, label="wolves")
-plt.plot(vp_sheep_counts, label="sheep")
-plt.plot(vp_grass_counts, label="grass")
-plt.legend()
-plt.savefig("virtual-patient.pdf")
+################################################################################
+# plot virtual patient
+
+fig = plt.figure()
+ax = fig.gca()
+ax.plot(vp_wolf_counts, label="wolves")
+ax.plot(vp_sheep_counts, label="sheep")
+ax.plot(vp_grass_counts, label="grass")
+ax.legend()
+fig.savefig(FILE_PREFIX + "virtual-patient.pdf")
+plt.close(fig)
+
+################################################################################
 
 
 def model_ensemble_from(means, covariances):
+    """
+    Create an ensemble of models from a distribution
+
+    :param means:
+    :param covariances:
+    :return:
+    """
     mdl_ensemble = []
     dist = multivariate_normal(mean=means, cov=covariances)
     for _ in range(ENSEMBLE_SIZE):
@@ -137,7 +185,25 @@ def model_ensemble_from(means, covariances):
     return mdl_ensemble
 
 
-def modify_model(model: WolfSheepGrassModel, state):
+################################################################################
+
+
+def modify_model(
+    model: WolfSheepGrassModel,
+    state: np.ndarray,
+    *,
+    ignore_state_vars: bool = False,
+    fix_grass_clocks: bool = False,
+):
+    """
+    Modify a model's microstate to fit a given macrostate
+
+    :param model: model instance (encodes microstate)
+    :param state: desired macrostate for the model
+    :param ignore_state_vars: if True, only alter parameters, not state variables
+    :param fix_grass_clocks: if True, make grass regrowth clocks consistent with new regrowth time
+    :return: None
+    """
     (
         num_wolves,
         num_sheep,
@@ -153,7 +219,13 @@ def modify_model(model: WolfSheepGrassModel, state):
     model.WOLF_REPRODUCE = wolf_reproduce
     model.SHEEP_REPRODUCE = sheep_reproduce
     model.GRASS_REGROWTH_TIME = grass_regrowth_time
-    np.minimum(model.grass_clock, model.GRASS_REGROWTH_TIME, out=model.grass_clock)
+    if fix_grass_clocks:
+        np.minimum(model.grass_clock, model.GRASS_REGROWTH_TIME, out=model.grass_clock)
+
+    if ignore_state_vars:
+        return
+
+    # Fix the number of wolves/sheep/grass by random spawning/killing.
 
     num_wolves = int(num_wolves)
     if num_wolves > model.num_wolves:
@@ -185,13 +257,23 @@ def modify_model(model: WolfSheepGrassModel, state):
     grass_present = np.sum(model.grass)
     if num_grass > grass_present:
         print(f"creating {num_grass - grass_present} new grass")
-        for _ in range(num_grass - grass_present):
-            model.spawn_grass()
+        try:
+            for _ in range(num_grass - grass_present):
+                model.spawn_grass()
+        except RuntimeError as e:
+            print(e)
     elif num_grass < grass_present:
         print(f"killing {grass_present - num_grass} grass")
-        for _ in range(grass_present - num_grass):
-            model.kill_random_grass()
+        try:
+            for _ in range(grass_present - num_grass):
+                model.kill_random_grass()
+        except RuntimeError as e:
+            print(e)
 
+
+################################################################################
+# Kalman filter simulation
+################################################################################
 
 # create ensemble of models for kalman filter
 model_ensemble = model_ensemble_from(mean_vec, cov_matrix)
@@ -235,33 +317,47 @@ while time < TIME_SPAN:
     for _ in range(SAMPLE_INTERVAL):
         for model in model_ensemble:
             model.time_step()
+            if PARAMETER_RANDOM_WALK:
+                macrostate = model_macro_data(model)
+                random_walk_macrostate = np.abs(
+                    macrostate
+                    + multivariate_normal(
+                        mean=np.zeros_like(macrostate),
+                        cov=np.diag(0.01 * np.ones_like(macrostate)),
+                    ).rvs()
+                )
+
+                modify_model(model, random_walk_macrostate, ignore_state_vars=True)
         time += 1
         macro_data = np.array([model_macro_data(model) for model in model_ensemble])
         mean_vec[time, :] = np.mean(macro_data, axis=0)
         cov_matrix[time, :, :] = np.cov(macro_data, rowvar=False)
 
-    fig, axs = plt.subplots(3)
+    ################################################################################
+    # plot state variables
+
+    fig, axs = plt.subplots(3, figsize=(6, 6))
     plural = {"wolf": "wolves", "sheep": "sheep", "grass": "grass"}
     vp_data = {
         "wolf": vp_wolf_counts,
         "sheep": vp_sheep_counts,
         "grass": vp_grass_counts,
     }
-    scales = {
+    max_scales = {
         "wolf": mean_init_wolves,
         "sheep": mean_init_sheep,
         "grass": mean_init_grass_proportion * GRID_HEIGHT * GRID_WIDTH,
     }
-    for idx, name in enumerate(["wolf", "sheep", "grass"]):
+    for idx, state_var_name in enumerate(["wolf", "sheep", "grass"]):
         axs[idx].plot(
-            vp_data[name][: (cycle + 1) * SAMPLE_INTERVAL + 1],
-            label=plural[name],
+            vp_data[state_var_name][: (cycle + 1) * SAMPLE_INTERVAL + 1],
+            label="true value",
             color="black",
         )
         axs[idx].plot(
             range(cycle * SAMPLE_INTERVAL + 1),
             mean_vec[: cycle * SAMPLE_INTERVAL + 1, idx],
-            label=name + " sim mean",
+            label="estimate",
         )
         axs[idx].fill_between(
             range(cycle * SAMPLE_INTERVAL + 1),
@@ -271,17 +367,81 @@ while time < TIME_SPAN:
                 - np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, idx, idx]),
             ),
             np.minimum(
-                10 * scales[name],
+                10 * max_scales[state_var_name],
                 mean_vec[: cycle * SAMPLE_INTERVAL + 1, idx]
                 + np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, idx, idx]),
             ),
             color="gray",
             alpha=0.35,
         )
+        axs[idx].set_title(state_var_name)
         axs[idx].legend()
-    fig.savefig(f"cycle-{cycle:03}-match.pdf")
+    fig.tight_layout()
+    fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-match.pdf")
+    plt.close(fig)
 
+    ################################################################################
+    # plot state variables
+
+    params = [
+        "wolf gain from food",
+        "sheep gain from food",
+        "wolf reproduce",
+        "sheep reproduce",
+        "grass regrowth time",
+    ]
+    vp_param_values = dict(
+        zip(
+            params,
+            [
+                vp_wolf_gain_from_food,
+                vp_sheep_gain_from_food,
+                vp_wolf_reproduce,
+                vp_sheep_reproduce,
+                vp_grass_regrowth_time,
+            ],
+        )
+    )
+
+    fig, axs = plt.subplots(3, 2, figsize=(8, 8))
+    for idx, param_name in enumerate(params):
+        row, col = idx % 3, idx // 3
+        axs[row, col].plot(
+            [0, (cycle + 1) * SAMPLE_INTERVAL + 1],
+            [vp_param_values[param_name]] * 2,
+            label="true value",
+            color="black",
+        )
+        axs[row, col].plot(
+            range(cycle * SAMPLE_INTERVAL + 1),
+            mean_vec[: cycle * SAMPLE_INTERVAL + 1, 3 + idx],
+            label="estimate",
+        )
+        axs[row, col].fill_between(
+            range(cycle * SAMPLE_INTERVAL + 1),
+            np.maximum(
+                0.0,
+                mean_vec[: cycle * SAMPLE_INTERVAL + 1, 3 + idx]
+                - np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, 3 + idx, 3 + idx]),
+            ),
+            np.minimum(
+                10 * vp_param_values[param_name],
+                mean_vec[: cycle * SAMPLE_INTERVAL + 1, 3 + idx]
+                + np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, 3 + idx, 3 + idx]),
+            ),
+            color="gray",
+            alpha=0.35,
+        )
+        axs[row, col].set_title(param_name)
+        axs[row, col].legend()
+    axs[2, 1].axis("off")
+    fig.tight_layout()
+    fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-match-params.pdf")
+    plt.close(fig)
+
+    ################################################################################
     # Kalman filter
+
     match OBSERVABLE:
         case "wolves":
             R = 2.0
@@ -310,18 +470,151 @@ while time < TIME_SPAN:
             raise RuntimeError("unknown observable?")
 
     v = observation - (H @ mean_vec[time, :])
-
     S = H @ cov_matrix[time, :, :] @ H.T + R
     K = cov_matrix[time, :, :] @ H.T @ np.linalg.inv(S)
 
     mean_vec[time, :] += K @ v
     cov_matrix[time, :, :] -= K @ S @ K.T
 
+    # numerical cleanup: symmetrize and project onto pos def cone
+    cov_matrix[time, :, :] = (cov_matrix[time, :, :] + cov_matrix[time, :, :].T) / 2.0
+    eigenvalues, eigenvectors = np.linalg.eig(cov_matrix[time, :, :])
+    eigenvalues = np.real(eigenvalues)  # just making sure
+    eigenvectors = np.real(eigenvectors)  # just making sure
+    cov_matrix[time, :, :] = (
+        eigenvectors @ np.diag(np.maximum(1e-9, eigenvalues)) @ eigenvectors.T
+    )
+
     # recreate ensemble
     if RESAMPLE_MODELS:
+        # create an entirely new set of model instances sampled from KF-learned distribution
         model_ensemble = model_ensemble_from(mean_vec[time, :], cov_matrix[time, :, :])
     else:
+        # sample from KF-learned dist and modify existing models to fit
         dist = multivariate_normal(mean=mean_vec[time, :], cov=cov_matrix[time, :, :])
         for model in model_ensemble:
             state = dist.rvs()
             modify_model(model, state)
+
+################################################################################
+
+vp_full_trajectory = np.array(
+    (
+        vp_wolf_counts,
+        vp_sheep_counts,
+        vp_grass_counts,
+        [vp_wolf_gain_from_food] * (TIME_SPAN + 1),
+        [vp_sheep_gain_from_food] * (TIME_SPAN + 1),
+        [vp_wolf_reproduce] * (TIME_SPAN + 1),
+        [vp_sheep_reproduce] * (TIME_SPAN + 1),
+        [vp_grass_regrowth_time] * (TIME_SPAN + 1),
+    )
+).T
+
+delta_full = mean_vec - vp_full_trajectory
+surprisal_full = np.einsum(
+    "ij,ij->i", delta_full, np.linalg.solve(cov_matrix, delta_full)
+)
+mean_surprisal_full = np.mean(surprisal_full)
+
+
+vp_state_trajectory = np.array(
+    (
+        vp_wolf_counts,
+        vp_sheep_counts,
+        vp_grass_counts,
+    )
+).T
+delta_state = mean_vec[:, :3] - vp_state_trajectory
+surprisal_state = np.einsum(
+    "ij,ij->i", delta_state, np.linalg.solve(cov_matrix[:, :3, :3], delta_state)
+)
+mean_surprisal_state = np.mean(surprisal_state)
+
+vp_param_trajectory = np.array(
+    (
+        [vp_wolf_gain_from_food] * (TIME_SPAN + 1),
+        [vp_sheep_gain_from_food] * (TIME_SPAN + 1),
+        [vp_wolf_reproduce] * (TIME_SPAN + 1),
+        [vp_sheep_reproduce] * (TIME_SPAN + 1),
+        [vp_grass_regrowth_time] * (TIME_SPAN + 1),
+    )
+).T
+delta_param = mean_vec[:, 3:] - vp_param_trajectory
+surprisal_param = np.einsum(
+    "ij,ij->i", delta_param, np.linalg.solve(cov_matrix[:, 3:, 3:], delta_param)
+)
+mean_surprisal_param = np.mean(surprisal_param)
+
+plt.plot(surprisal_full, label="full surprisal")
+plt.plot(surprisal_state, label="state surprisal")
+plt.plot(surprisal_param, label="param surprisal")
+plt.legend()
+plt.tight_layout()
+plt.savefig(FILE_PREFIX + f"surprisal.pdf")
+plt.close()
+
+fig, axs = plt.subplots(4, figsize=(6, 8))
+plural = {"wolf": "wolves", "sheep": "sheep", "grass": "grass"}
+vp_data = {
+    "wolf": vp_wolf_counts,
+    "sheep": vp_sheep_counts,
+    "grass": vp_grass_counts,
+}
+max_scales = {
+    "wolf": 10 * mean_init_wolves,
+    "sheep": 10 * mean_init_sheep,
+    "grass": 10 * mean_init_grass_proportion * GRID_HEIGHT * GRID_WIDTH,
+}
+for idx, state_var_name in enumerate(["wolf", "sheep", "grass"]):
+    axs[idx].plot(
+        vp_data[state_var_name],
+        label="true value",
+        color="black",
+    )
+    axs[idx].plot(
+        range(TIME_SPAN + 1),
+        mean_vec[:, idx],
+        label="estimate",
+    )
+    axs[idx].fill_between(
+        range(TIME_SPAN + 1),
+        np.maximum(
+            0.0,
+            mean_vec[:, idx] - np.sqrt(cov_matrix[:, idx, idx]),
+        ),
+        np.minimum(
+            max_scales[state_var_name],
+            mean_vec[:, idx] + np.sqrt(cov_matrix[:, idx, idx]),
+        ),
+        color="gray",
+        alpha=0.35,
+    )
+    axs[idx].set_title(state_var_name)
+    axs[idx].legend()
+axs[3].set_title("surprisal")
+axs[3].plot(surprisal_state, label="state surprisal")
+axs[3].plot(
+    [0, TIME_SPAN + 1], [mean_surprisal_state, mean_surprisal_state], ":", color="black"
+)
+fig.tight_layout()
+fig.savefig(FILE_PREFIX + f"match.pdf")
+plt.close(fig)
+
+np.savez_compressed(
+    FILE_PREFIX + f"data.npz",
+    vp_full_trajectory=vp_full_trajectory,
+    mean_vec=mean_vec,
+    cov_matrix=cov_matrix,
+)
+with open(FILE_PREFIX + "meansurprisal.csv", "w") as file:
+    file.write(",".join(["full", "state", "param"]))
+    file.write(
+        ",".join(
+            [
+                str(mean_surprisal_full),
+                str(mean_surprisal_state),
+                str(mean_surprisal_param),
+            ]
+        )
+    )
