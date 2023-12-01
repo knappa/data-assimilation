@@ -1,10 +1,9 @@
+import argparse
+
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import multivariate_normal
 from wolf_sheep_grass import WolfSheepGrassModel
-import sys
-import argparse
-
 
 ################################################################################
 parser = argparse.ArgumentParser()
@@ -14,15 +13,20 @@ parser.add_argument("--prefix", type=str, default="", help="output file prefix")
 parser.add_argument(
     "--measurements",
     type=str,
-    choices=["wolves", "sheep", "grass", "wolves+grass"],
+    choices=[
+        "wolves",
+        "sheep",
+        "grass",
+        "wolves+grass",
+        "sheep+grass",
+        "wolves+sheep",
+        "wolves+sheep+grass",
+    ],
     default="grass",
     help="which things to measure",
 )
 
-# parser.add_argument("--extra-graphsprefix", type=str, default="", help="output file prefix")
-
 args = parser.parse_args()
-
 
 ################################################################################
 # constants
@@ -145,6 +149,7 @@ ax.legend()
 fig.savefig(FILE_PREFIX + "virtual-patient.pdf")
 plt.close(fig)
 
+
 ################################################################################
 
 
@@ -157,7 +162,7 @@ def model_ensemble_from(means, covariances):
     :return:
     """
     mdl_ensemble = []
-    dist = multivariate_normal(mean=means, cov=covariances)
+    distribution = multivariate_normal(mean=means, cov=covariances)
     for _ in range(ENSEMBLE_SIZE):
         (
             en_init_wolves,
@@ -168,7 +173,7 @@ def model_ensemble_from(means, covariances):
             en_wolf_reproduce,
             en_sheep_reproduce,
             en_grass_regrowth_time,
-        ) = np.abs(dist.rvs())
+        ) = np.abs(distribution.rvs())
         en_model = WolfSheepGrassModel(
             GRID_WIDTH=GRID_WIDTH,
             GRID_HEIGHT=GRID_HEIGHT,
@@ -190,7 +195,7 @@ def model_ensemble_from(means, covariances):
 
 def modify_model(
     model: WolfSheepGrassModel,
-    state: np.ndarray,
+    desired_state: np.ndarray,
     *,
     ignore_state_vars: bool = False,
     fix_grass_clocks: bool = False,
@@ -199,7 +204,7 @@ def modify_model(
     Modify a model's microstate to fit a given macrostate
 
     :param model: model instance (encodes microstate)
-    :param state: desired macrostate for the model
+    :param desired_state: desired macrostate for the model
     :param ignore_state_vars: if True, only alter parameters, not state variables
     :param fix_grass_clocks: if True, make grass regrowth clocks consistent with new regrowth time
     :return: None
@@ -213,7 +218,7 @@ def modify_model(
         wolf_reproduce,
         sheep_reproduce,
         grass_regrowth_time,
-    ) = np.abs(state)
+    ) = np.abs(desired_state)
     model.WOLF_GAIN_FROM_FOOD = wolf_gain_from_food
     model.SHEEP_GAIN_FROM_FOOD = sheep_gain_from_food
     model.WOLF_REPRODUCE = wolf_reproduce
@@ -285,16 +290,16 @@ def model_macro_data(model: WolfSheepGrassModel):
     :param model:
     :return:
     """
-    macro_data = np.zeros(UNIFIED_STATE_SPACE_DIMENSION, dtype=np.float64)
-    macro_data[0] = model.num_wolves
-    macro_data[1] = model.num_sheep
-    macro_data[2] = np.sum(model.grass)
-    macro_data[3] = model.WOLF_GAIN_FROM_FOOD
-    macro_data[4] = model.SHEEP_GAIN_FROM_FOOD
-    macro_data[5] = model.WOLF_REPRODUCE
-    macro_data[6] = model.SHEEP_REPRODUCE
-    macro_data[7] = model.GRASS_REGROWTH_TIME
-    return macro_data
+    macroscale_data = np.zeros(UNIFIED_STATE_SPACE_DIMENSION, dtype=np.float64)
+    macroscale_data[0] = model.num_wolves
+    macroscale_data[1] = model.num_sheep
+    macroscale_data[2] = np.sum(model.grass)
+    macroscale_data[3] = model.WOLF_GAIN_FROM_FOOD
+    macroscale_data[4] = model.SHEEP_GAIN_FROM_FOOD
+    macroscale_data[5] = model.WOLF_REPRODUCE
+    macroscale_data[6] = model.SHEEP_REPRODUCE
+    macroscale_data[7] = model.GRASS_REGROWTH_TIME
+    return macroscale_data
 
 
 # mean and covariances through time
@@ -454,7 +459,7 @@ while time < TIME_SPAN:
             H[0, 1] = 1.0  # observe sheep
             observation = vp_sheep_counts[time]
         case "grass":
-            R = 2.0
+            R = 1.0
             H = np.zeros((1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 2] = 1.0  # observe grass
             observation = vp_grass_counts[time]
@@ -465,6 +470,32 @@ while time < TIME_SPAN:
             H[1, 2] = 1.0  # observe grass
             observation = np.array(
                 [vp_wolf_counts[time], vp_grass_counts[time]], dtype=np.float64
+            )
+        case "sheep+grass":
+            R = np.diag([2.0, 1.0])
+            H = np.zeros((2, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
+            H[0, 1] = 1.0  # observe sheep
+            H[1, 2] = 1.0  # observe grass
+            observation = np.array(
+                [vp_sheep_counts[time], vp_grass_counts[time]], dtype=np.float64
+            )
+        case "wolves+sheep":
+            R = np.diag([2.0, 2.0])
+            H = np.zeros((2, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
+            H[0, 0] = 1.0  # observe wolves
+            H[1, 1] = 1.0  # observe sheep
+            observation = np.array(
+                [vp_wolf_counts[time], vp_sheep_counts[time]], dtype=np.float64
+            )
+        case "wolves+sheep+grass":
+            R = np.diag([2.0, 2.0, 1.0])
+            H = np.zeros((3, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
+            H[0, 0] = 1.0  # observe wolves
+            H[1, 1] = 1.0  # observe sheep
+            H[2, 2] = 1.0  # observe sheep
+            observation = np.array(
+                [vp_wolf_counts[time], vp_sheep_counts[time], vp_grass_counts[time]],
+                dtype=np.float64,
             )
         case _:
             raise RuntimeError("unknown observable?")
@@ -482,8 +513,9 @@ while time < TIME_SPAN:
     eigenvalues = np.real(eigenvalues)  # just making sure
     eigenvectors = np.real(eigenvectors)  # just making sure
     cov_matrix[time, :, :] = (
-        eigenvectors @ np.diag(np.maximum(1e-9, eigenvalues)) @ eigenvectors.T
+        eigenvectors @ np.diag(np.maximum(1e-6, eigenvalues)) @ eigenvectors.T
     )
+    cov_matrix[time, :, :] = (cov_matrix[time, :, :] + cov_matrix[time, :, :].T) / 2.0
 
     # recreate ensemble
     if RESAMPLE_MODELS:
@@ -516,7 +548,6 @@ surprisal_full = np.einsum(
     "ij,ij->i", delta_full, np.linalg.solve(cov_matrix, delta_full)
 )
 mean_surprisal_full = np.mean(surprisal_full)
-
 
 vp_state_trajectory = np.array(
     (
