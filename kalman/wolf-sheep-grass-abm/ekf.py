@@ -41,6 +41,8 @@ else:
         required=True,
     )
 
+    parser.add_argument("--graphs", help="make pdf graphs", action="store_true")
+
     args = parser.parse_args()
 
 
@@ -66,6 +68,8 @@ MODEL_MATCHMAKER = True if not hasattr(args, "matchmaker") else (args.matchmaker
 PARAMETER_RANDOM_WALK = True
 
 FILE_PREFIX = "" if not hasattr(args, "prefix") else args.prefix + "-"
+
+GRAPHS = False if not hasattr(args, "graphs") else bool(args.graphs)
 
 ################################################################################
 # statistical parameters
@@ -162,14 +166,15 @@ for t in range(1, TIME_SPAN + 1):
 ################################################################################
 # plot virtual patient
 
-fig = plt.figure()
-ax = fig.gca()
-ax.plot(vp_wolf_counts, label="wolves")
-ax.plot(vp_sheep_counts, label="sheep")
-ax.plot(vp_grass_counts, label="grass")
-ax.legend()
-fig.savefig(FILE_PREFIX + "virtual-patient.pdf")
-plt.close(fig)
+if GRAPHS:
+    fig = plt.figure()
+    ax = fig.gca()
+    ax.plot(vp_wolf_counts, label="wolves")
+    ax.plot(vp_sheep_counts, label="sheep")
+    ax.plot(vp_grass_counts, label="grass")
+    ax.legend()
+    fig.savefig(FILE_PREFIX + "virtual-patient.pdf")
+    plt.close(fig)
 
 
 ################################################################################
@@ -363,108 +368,110 @@ while time < TIME_SPAN:
     ################################################################################
     # plot state variables
 
-    fig, axs = plt.subplots(3, figsize=(6, 6))
-    plural = {"wolf": "wolves", "sheep": "sheep", "grass": "grass"}
-    vp_data = {
-        "wolf": vp_wolf_counts,
-        "sheep": vp_sheep_counts,
-        "grass": vp_grass_counts,
-    }
-    max_scales = {
-        "wolf": mean_init_wolves,
-        "sheep": mean_init_sheep,
-        "grass": mean_init_grass_proportion * GRID_HEIGHT * GRID_WIDTH,
-    }
-    for idx, state_var_name in enumerate(["wolf", "sheep", "grass"]):
-        axs[idx].plot(
-            vp_data[state_var_name][: (cycle + 1) * SAMPLE_INTERVAL + 1],
-            label="true value",
-            color="black",
-        )
-        axs[idx].plot(
-            range(cycle * SAMPLE_INTERVAL + 1),
-            mean_vec[: cycle * SAMPLE_INTERVAL + 1, idx],
-            label="estimate",
-        )
-        axs[idx].fill_between(
-            range(cycle * SAMPLE_INTERVAL + 1),
-            np.maximum(
-                0.0,
-                mean_vec[: cycle * SAMPLE_INTERVAL + 1, idx]
-                - np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, idx, idx]),
-            ),
-            np.minimum(
-                10 * max_scales[state_var_name],
-                mean_vec[: cycle * SAMPLE_INTERVAL + 1, idx]
-                + np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, idx, idx]),
-            ),
-            color="gray",
-            alpha=0.35,
-        )
-        axs[idx].set_title(state_var_name)
-        axs[idx].legend()
-    fig.tight_layout()
-    fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-match.pdf")
-    plt.close(fig)
+    if GRAPHS:
+        fig, axs = plt.subplots(3, figsize=(6, 6))
+        plural = {"wolf": "wolves", "sheep": "sheep", "grass": "grass"}
+        vp_data = {
+            "wolf": vp_wolf_counts,
+            "sheep": vp_sheep_counts,
+            "grass": vp_grass_counts,
+        }
+        max_scales = {
+            "wolf": mean_init_wolves,
+            "sheep": mean_init_sheep,
+            "grass": mean_init_grass_proportion * GRID_HEIGHT * GRID_WIDTH,
+        }
+        for idx, state_var_name in enumerate(["wolf", "sheep", "grass"]):
+            axs[idx].plot(
+                vp_data[state_var_name][: (cycle + 1) * SAMPLE_INTERVAL + 1],
+                label="true value",
+                color="black",
+            )
+            axs[idx].plot(
+                range(cycle * SAMPLE_INTERVAL + 1),
+                mean_vec[: cycle * SAMPLE_INTERVAL + 1, idx],
+                label="estimate",
+            )
+            axs[idx].fill_between(
+                range(cycle * SAMPLE_INTERVAL + 1),
+                np.maximum(
+                    0.0,
+                    mean_vec[: cycle * SAMPLE_INTERVAL + 1, idx]
+                    - np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, idx, idx]),
+                ),
+                np.minimum(
+                    10 * max_scales[state_var_name],
+                    mean_vec[: cycle * SAMPLE_INTERVAL + 1, idx]
+                    + np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, idx, idx]),
+                ),
+                color="gray",
+                alpha=0.35,
+            )
+            axs[idx].set_title(state_var_name)
+            axs[idx].legend()
+        fig.tight_layout()
+        fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-match.pdf")
+        plt.close(fig)
 
     ################################################################################
     # plot state variables
 
-    params = [
-        "wolf gain from food",
-        "sheep gain from food",
-        "wolf reproduce",
-        "sheep reproduce",
-        "grass regrowth time",
-    ]
-    vp_param_values = dict(
-        zip(
-            params,
-            [
-                vp_wolf_gain_from_food,
-                vp_sheep_gain_from_food,
-                vp_wolf_reproduce,
-                vp_sheep_reproduce,
-                vp_grass_regrowth_time,
-            ],
+    if GRAPHS:
+        params = [
+            "wolf gain from food",
+            "sheep gain from food",
+            "wolf reproduce",
+            "sheep reproduce",
+            "grass regrowth time",
+        ]
+        vp_param_values = dict(
+            zip(
+                params,
+                [
+                    vp_wolf_gain_from_food,
+                    vp_sheep_gain_from_food,
+                    vp_wolf_reproduce,
+                    vp_sheep_reproduce,
+                    vp_grass_regrowth_time,
+                ],
+            )
         )
-    )
 
-    fig, axs = plt.subplots(3, 2, figsize=(8, 8))
-    for idx, param_name in enumerate(params):
-        row, col = idx % 3, idx // 3
-        axs[row, col].plot(
-            [0, (cycle + 1) * SAMPLE_INTERVAL + 1],
-            [vp_param_values[param_name]] * 2,
-            label="true value",
-            color="black",
-        )
-        axs[row, col].plot(
-            range(cycle * SAMPLE_INTERVAL + 1),
-            mean_vec[: cycle * SAMPLE_INTERVAL + 1, 3 + idx],
-            label="estimate",
-        )
-        axs[row, col].fill_between(
-            range(cycle * SAMPLE_INTERVAL + 1),
-            np.maximum(
-                0.0,
-                mean_vec[: cycle * SAMPLE_INTERVAL + 1, 3 + idx]
-                - np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, 3 + idx, 3 + idx]),
-            ),
-            np.minimum(
-                10 * vp_param_values[param_name],
-                mean_vec[: cycle * SAMPLE_INTERVAL + 1, 3 + idx]
-                + np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, 3 + idx, 3 + idx]),
-            ),
-            color="gray",
-            alpha=0.35,
-        )
-        axs[row, col].set_title(param_name)
-        axs[row, col].legend()
-    axs[2, 1].axis("off")
-    fig.tight_layout()
-    fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-match-params.pdf")
-    plt.close(fig)
+        fig, axs = plt.subplots(3, 2, figsize=(8, 8))
+        for idx, param_name in enumerate(params):
+            row, col = idx % 3, idx // 3
+            axs[row, col].plot(
+                [0, (cycle + 1) * SAMPLE_INTERVAL + 1],
+                [vp_param_values[param_name]] * 2,
+                label="true value",
+                color="black",
+            )
+            axs[row, col].plot(
+                range(cycle * SAMPLE_INTERVAL + 1),
+                mean_vec[: cycle * SAMPLE_INTERVAL + 1, 3 + idx],
+                label="estimate",
+            )
+            axs[row, col].fill_between(
+                range(cycle * SAMPLE_INTERVAL + 1),
+                np.maximum(
+                    0.0,
+                    mean_vec[: cycle * SAMPLE_INTERVAL + 1, 3 + idx]
+                    - np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, 3 + idx, 3 + idx]),
+                ),
+                np.minimum(
+                    10 * vp_param_values[param_name],
+                    mean_vec[: cycle * SAMPLE_INTERVAL + 1, 3 + idx]
+                    + np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, 3 + idx, 3 + idx]),
+                ),
+                color="gray",
+                alpha=0.35,
+            )
+            axs[row, col].set_title(param_name)
+            axs[row, col].legend()
+        axs[2, 1].axis("off")
+        fig.tight_layout()
+        fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-match-params.pdf")
+        plt.close(fig)
 
     ################################################################################
     # Kalman filter
@@ -657,58 +664,62 @@ surprisal_param = np.einsum(
 )
 mean_surprisal_param = np.mean(surprisal_param)
 
-plt.plot(surprisal_full, label="full surprisal")
-plt.plot(surprisal_state, label="state surprisal")
-plt.plot(surprisal_param, label="param surprisal")
-plt.legend()
-plt.tight_layout()
-plt.savefig(FILE_PREFIX + f"surprisal.pdf")
-plt.close()
+if GRAPHS:
+    plt.plot(surprisal_full, label="full surprisal")
+    plt.plot(surprisal_state, label="state surprisal")
+    plt.plot(surprisal_param, label="param surprisal")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(FILE_PREFIX + f"surprisal.pdf")
+    plt.close()
 
-fig, axs = plt.subplots(4, figsize=(6, 8))
-plural = {"wolf": "wolves", "sheep": "sheep", "grass": "grass"}
-vp_data = {
-    "wolf": vp_wolf_counts,
-    "sheep": vp_sheep_counts,
-    "grass": vp_grass_counts,
-}
-max_scales = {
-    "wolf": 10 * mean_init_wolves,
-    "sheep": 10 * mean_init_sheep,
-    "grass": 10 * mean_init_grass_proportion * GRID_HEIGHT * GRID_WIDTH,
-}
-for idx, state_var_name in enumerate(["wolf", "sheep", "grass"]):
-    axs[idx].plot(
-        vp_data[state_var_name],
-        label="true value",
-        color="black",
+if GRAPHS:
+    fig, axs = plt.subplots(4, figsize=(6, 8))
+    plural = {"wolf": "wolves", "sheep": "sheep", "grass": "grass"}
+    vp_data = {
+        "wolf": vp_wolf_counts,
+        "sheep": vp_sheep_counts,
+        "grass": vp_grass_counts,
+    }
+    max_scales = {
+        "wolf": 10 * mean_init_wolves,
+        "sheep": 10 * mean_init_sheep,
+        "grass": 10 * mean_init_grass_proportion * GRID_HEIGHT * GRID_WIDTH,
+    }
+    for idx, state_var_name in enumerate(["wolf", "sheep", "grass"]):
+        axs[idx].plot(
+            vp_data[state_var_name],
+            label="true value",
+            color="black",
+        )
+        axs[idx].plot(
+            range(TIME_SPAN + 1),
+            mean_vec[:, idx],
+            label="estimate",
+        )
+        axs[idx].fill_between(
+            range(TIME_SPAN + 1),
+            np.maximum(
+                0.0,
+                mean_vec[:, idx] - np.sqrt(cov_matrix[:, idx, idx]),
+            ),
+            np.minimum(
+                max_scales[state_var_name],
+                mean_vec[:, idx] + np.sqrt(cov_matrix[:, idx, idx]),
+            ),
+            color="gray",
+            alpha=0.35,
+        )
+        axs[idx].set_title(state_var_name)
+        axs[idx].legend()
+    axs[3].set_title("surprisal")
+    axs[3].plot(surprisal_state, label="state surprisal")
+    axs[3].plot(
+        [0, TIME_SPAN + 1], [mean_surprisal_state, mean_surprisal_state], ":", color="black"
     )
-    axs[idx].plot(
-        range(TIME_SPAN + 1),
-        mean_vec[:, idx],
-        label="estimate",
-    )
-    axs[idx].fill_between(
-        range(TIME_SPAN + 1),
-        np.maximum(
-            0.0,
-            mean_vec[:, idx] - np.sqrt(cov_matrix[:, idx, idx]),
-        ),
-        np.minimum(
-            max_scales[state_var_name],
-            mean_vec[:, idx] + np.sqrt(cov_matrix[:, idx, idx]),
-        ),
-        color="gray",
-        alpha=0.35,
-    )
-    axs[idx].set_title(state_var_name)
-    axs[idx].legend()
-axs[3].set_title("surprisal")
-axs[3].plot(surprisal_state, label="state surprisal")
-axs[3].plot([0, TIME_SPAN + 1], [mean_surprisal_state, mean_surprisal_state], ":", color="black")
-fig.tight_layout()
-fig.savefig(FILE_PREFIX + f"match.pdf")
-plt.close(fig)
+    fig.tight_layout()
+    fig.savefig(FILE_PREFIX + f"match.pdf")
+    plt.close(fig)
 
 np.savez_compressed(
     FILE_PREFIX + f"data.npz",
@@ -717,13 +728,17 @@ np.savez_compressed(
     cov_matrix=cov_matrix,
 )
 with open(FILE_PREFIX + "meansurprisal.csv", "w") as file:
-    file.write(",".join(["full", "state", "param"]))
-    file.write(
-        ",".join(
-            [
-                str(mean_surprisal_full),
-                str(mean_surprisal_state),
-                str(mean_surprisal_param),
-            ]
-        )
+    file.writelines(
+        [
+            ",".join(["full", "state", "param"]),
+            "\n"
+            ",".join(
+                [
+                    str(mean_surprisal_full),
+                    str(mean_surprisal_state),
+                    str(mean_surprisal_param),
+                ]
+            ),
+            "\n",
+        ]
     )
