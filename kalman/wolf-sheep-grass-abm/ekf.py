@@ -1,10 +1,11 @@
 import argparse
+import csv
+import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import multivariate_normal
 from wolf_sheep_grass import WolfSheepGrassModel
-import sys
 
 ################################################################################
 
@@ -728,17 +729,6 @@ np.savez_compressed(
     cov_matrix=cov_matrix,
 )
 with open(FILE_PREFIX + "meansurprisal.csv", "w") as file:
-    file.writelines(
-        [
-            ",".join(["full", "state", "param"]),
-            "\n"
-            ",".join(
-                [
-                    str(mean_surprisal_full),
-                    str(mean_surprisal_state),
-                    str(mean_surprisal_param),
-                ]
-            ),
-            "\n",
-        ]
-    )
+    csvwriter = csv.writer(file, delimiter=",", quoting=csv.QUOTE_MINIMAL)
+    csvwriter.writerow(["full", "state", "param"])
+    csvwriter.writerow([mean_surprisal_full, mean_surprisal_state, mean_surprisal_param])
