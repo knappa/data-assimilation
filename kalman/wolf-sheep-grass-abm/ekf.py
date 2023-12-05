@@ -4,6 +4,7 @@ import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
+import scipy
 from scipy.stats import multivariate_normal
 from wolf_sheep_grass import WolfSheepGrassModel
 
@@ -532,12 +533,23 @@ while time < TIME_SPAN:
     cov_matrix[time, :, :] -= K @ S @ K.T
 
     # numerical cleanup: symmetrize and project onto pos def cone
-    cov_matrix[time, :, :] = (cov_matrix[time, :, :] + cov_matrix[time, :, :].T) / 2.0
-    eigenvalues, eigenvectors = np.linalg.eig(cov_matrix[time, :, :])
-    eigenvalues = np.real(eigenvalues)  # just making sure
-    eigenvectors = np.real(eigenvectors)  # just making sure
-    cov_matrix[time, :, :] = eigenvectors @ np.diag(np.maximum(1e-6, eigenvalues)) @ eigenvectors.T
-    cov_matrix[time, :, :] = (cov_matrix[time, :, :] + cov_matrix[time, :, :].T) / 2.0
+    cov_matrix[time, :, :] = np.nan_to_num(
+        (np.nan_to_num(cov_matrix[time, :, :]) + np.nan_to_num(cov_matrix[time, :, :].T)) / 2.0
+    )
+    eigenvalues, eigenvectors = scipy.linalg.eigh(
+        cov_matrix[time, :, :], lower=True, check_finite=False
+    )
+    eigenvalues[:] = np.real(eigenvalues)  # just making sure
+    eigenvectors[:, :] = np.real(eigenvectors)  # just making sure
+    # spectrum must be positive.
+    # from the scipy code, it also can't have a max/min e-val ratio bigger than 1/(1e6*double machine epsilon)
+    # and that's ~4503599627.370496=1/(1e6*np.finfo('d').eps), so a ratio bounded by 1e9 is ok.
+    cov_matrix[time, :, :] = (
+        eigenvectors @ np.diag(np.minimum(1e5, np.maximum(1e-4, eigenvalues))) @ eigenvectors.T
+    )
+    cov_matrix[time, :, :] = np.nan_to_num(
+        (np.nan_to_num(cov_matrix[time, :, :]) + np.nan_to_num(cov_matrix[time, :, :].T)) / 2.0
+    )
 
     # recreate ensemble
     if RESAMPLE_MODELS:
