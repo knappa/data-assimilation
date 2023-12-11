@@ -24,7 +24,7 @@ for category in categories:
                 state_surprisal_stats[category].append(state)
                 param_surprisal_stats[category].append(param)
             print(filename)
-        except:
+        except FileNotFoundError:
             pass
 
 np_full_surprisal_stats = dict()
