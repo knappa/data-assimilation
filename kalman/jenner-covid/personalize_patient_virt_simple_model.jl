@@ -456,6 +456,8 @@ for interval_idx = 1:length(time_intervals)-1
         H * history_sample_means[:, end]
     smoothed_means[:, end] = history_sample_means[:, end] + K * v
     smoothed_covs[:, :, end] = Symmetric(history_sample_covs[:, :, end] - K * S * K')
+    smoothed_covs[:, :, end] = pos_def_projection(smoothed_covs[:, :, end])
+
 
     # create an interpolator for history, used in the compuation of the numerical 
     # jacobian. This just uses the means, avoiding stochasticity. (which the numerical
@@ -517,6 +519,9 @@ for interval_idx = 1:length(time_intervals)-1
                     A * history_sample_covs[:, :, hist_idx] * A' - Q
                 ) *
                 G'
+
+            smoothed_covs[:, :, hist_idx] =
+                pos_def_projection(smoothed_covs[:, :, hist_idx])
 
         end
     end
