@@ -2,10 +2,13 @@ import argparse
 import csv
 import sys
 
+import an_cockrell
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy
+from an_cockrell import AnCockrellModel, EpiType
 from scipy.stats import multivariate_normal
+from tqdm.auto import tqdm
 
 ################################################################################
 
@@ -40,7 +43,7 @@ else:
     parser.add_argument(
         "--matchmaker",
         help="try to match resampled macrostates with microstate "
-             "models to minimize change magnitude",
+        "models to minimize change magnitude",
         type=str,
         choices=["yes", "no"],
         required=True,
@@ -56,6 +59,7 @@ else:
 default_params = dict(
     GRID_WIDTH=51,
     GRID_HEIGHT=51,
+    is_bat=False,
     init_inoculum=100,
     init_dcs=50,
     init_nks=25,
@@ -95,7 +99,7 @@ default_params = dict(
     activated_endo_pmn_spawn_prob=0.1,
     activated_endo_pmn_spawn_dist=5.0,
     extracellular_virus_init_amount_lower=80,
-    extracellular_virus_init_amount_upper=120,
+    extracellular_virus_init_amount_range=40,
     human_viral_lower_bound=0.0,
     human_t1ifn_effect_scale=0.01,
     pmn_max_age=36,
@@ -104,12 +108,12 @@ default_params = dict(
     nk_ifng_secretion=1.0,
     macro_max_virus_uptake=10.0,
     macro_activation_threshold=5.0,
+    macro_antiactivation_threshold=5.0,
     activated_macro_il8_secretion=1.0,
     activated_macro_il12_secretion=0.5,
     activated_macro_tnf_secretion=1.0,
     activated_macro_il6_secretion=0.4,
     activated_macro_il10_secretion=1.0,
-    macro_antiactivation_threshold=-5.0,
     antiactivated_macro_il10_secretion=0.5,
     inflammasome_il1_secretion=1.0,
     inflammasome_macro_pre_il1_secretion=5.0,
@@ -140,11 +144,38 @@ default_params = dict(
     evap_const_2=0.9,
 )
 
-variational_params = [
+state_vars = [
+    "total_T1IFN",
+    "total_TNF",
+    "total_IFNg",
+    "total_IL6",
+    "total_IL1",
+    "total_IL8",
+    "total_IL10",
+    "total_IL12",
+    "total_IL18",
+    "total_extracellular_virus",
+    "total_intracellular_virus",
+    "apoptosis_eaten_counter",
+    "infected_epithelium_count",
+    "dead_epithelium_count",
+    "apoptosed_epithelium_count",
+    "healthy_epithelium_count",
+    "system_health",
+    "dc_count",
+    "nk_count",
+    "pmn_count",
+    "macro_count",
+]
+
+init_only_params = [
     "init_inoculum",
     "init_dcs",
     "init_nks",
     "init_macros",
+]
+
+variational_params = [
     "macro_phago_recovery",
     "macro_phago_limit",
     "inflammasome_activation_threshold",
@@ -180,8 +211,7 @@ variational_params = [
     "activated_endo_pmn_spawn_prob",
     "activated_endo_pmn_spawn_dist",
     "extracellular_virus_init_amount_lower",
-    "extracellular_virus_init_amount_upper",
-    "human_viral_lower_bound",
+    "extracellular_virus_init_amount_range",
     "human_t1ifn_effect_scale",
     "pmn_max_age",
     "pmn_ros_secretion_on_death",
@@ -189,12 +219,12 @@ variational_params = [
     "nk_ifng_secretion",
     "macro_max_virus_uptake",
     "macro_activation_threshold",
+    "macro_antiactivation_threshold",
     "activated_macro_il8_secretion",
     "activated_macro_il12_secretion",
     "activated_macro_tnf_secretion",
     "activated_macro_il6_secretion",
     "activated_macro_il10_secretion",
-    "macro_antiactivation_threshold",
     "antiactivated_macro_il10_secretion",
     "inflammasome_il1_secretion",
     "inflammasome_macro_pre_il1_secretion",
@@ -206,30 +236,35 @@ variational_params = [
     "dc_ifng_secretion",
     "dc_il6_secretion",
     "dc_il6_max_uptake",
-    "extracellular_virus_diffusion_const",
-    "T1IFN_diffusion_const",
-    "PAF_diffusion_const",
-    "ROS_diffusion_const",
-    "P_DAMPS_diffusion_const",
-    "IFNg_diffusion_const",
-    "TNF_diffusion_const",
-    "IL6_diffusion_const",
-    "IL1_diffusion_const",
-    "IL10_diffusion_const",
-    "IL12_diffusion_const",
-    "IL18_diffusion_const",
-    "IL8_diffusion_const",
-    "extracellular_virus_cleanup_threshold",
-    "cleanup_threshold",
-    "evap_const_1",
-    "evap_const_2",
+    # # ACK's Executive Judgement: These are physics-like parameters and won't vary between individuals.
+    # # They also include model-intrinsic things like a cleanup thresholds which don't precisely
+    # # correspond to read world objects.
+    # "human_viral_lower_bound", # 0.0
+    # "extracellular_virus_diffusion_const",
+    # "T1IFN_diffusion_const",
+    # "PAF_diffusion_const",
+    # "ROS_diffusion_const",
+    # "P_DAMPS_diffusion_const",
+    # "IFNg_diffusion_const",
+    # "TNF_diffusion_const",
+    # "IL6_diffusion_const",
+    # "IL1_diffusion_const",
+    # "IL10_diffusion_const",
+    # "IL12_diffusion_const",
+    # "IL18_diffusion_const",
+    # "IL8_diffusion_const",
+    # "extracellular_virus_cleanup_threshold",
+    # "cleanup_threshold",
+    # "evap_const_1",
+    # "evap_const_2",
 ]
 
+assert all(param in default_params for param in variational_params)
 
 TIME_SPAN = 2016
 SAMPLE_INTERVAL = 48  # how often to make measurements
 ENSEMBLE_SIZE = 50
-UNIFIED_STATE_SPACE_DIMENSION = 8  # 3 macrostates and 5 parameters TODO
+UNIFIED_STATE_SPACE_DIMENSION = len(state_vars) + len(variational_params)
 OBSERVABLES = "extracellular_virus" if not hasattr(args, "measurements") else args.measurements
 
 RESAMPLE_MODELS = False
@@ -249,120 +284,73 @@ GRAPHS = False if not hasattr(args, "graphs") else bool(args.graphs)
 ################################################################################
 # statistical parameters
 
-mean_init_inoculum = 100 # not same as initial virus, but related
-mean_init_macros = 50
-mean_init_dcs = 50 # param
-mean_init_nks = 25 # param
-macro_phago_recovery = 0.5,
-macro_phago_limit = 1_000,
-inflammasome_activation_threshold = 10,  # default 50 for bats
-inflammasome_priming_threshold = 1.0,  # default 5.0 for bats
-viral_carrying_capacity = 500,
-susceptibility_to_infection = 77,
-human_endo_activation = 5,
-human_metabolic_byproduct = 0.2,
-resistance_to_infection = 75,
-viral_incubation_threshold = 60,
-
-mean_init_wolves = 50  # state variable (int valued)
-std_init_wolves = 5  # expected to be <= sqrt(50) ~= 7
-mean_init_sheep = 100  # state variable (int valued)
-std_init_sheep = 5  # expected to be <= sqrt(100) = 10
-mean_init_grass_proportion = 0.5  # state variable
-std_init_grass_proportion = 0.02  # expected to be <= sqrt(0.5*51^2)/(51^2) ~= 0.04
-mean_wolf_gain_from_food = 20.0  # parameter
-std_wolf_gain_from_food = 1.0  # arbitrary
-mean_sheep_gain_from_food = 4.0  # parameter
-std_sheep_gain_from_food = 1.0  # arbitrary
-mean_wolf_reproduce = 5.0  # parameter
-std_wolf_reproduce = 1.0  # arbitrary
-mean_sheep_reproduce = 4.0  # parameter
-std_sheep_reproduce = 1.0  # arbitrary
-mean_grass_regrowth_time = 30.0  # parameter
-std_grass_regrowth_time = 1.0  # arbitrary
-
-mean_vec = np.array(
-    [
-        mean_init_wolves,
-        mean_init_sheep,
-        mean_init_grass_proportion * GRID_HEIGHT * GRID_WIDTH,
-        mean_wolf_gain_from_food,
-        mean_sheep_gain_from_food,
-        mean_wolf_reproduce,
-        mean_sheep_reproduce,
-        mean_grass_regrowth_time,
-    ]
+init_mean_vec = np.array(
+    [default_params[param] for param in (init_only_params + variational_params)]
 )
 
-cov_matrix = np.diag(
+init_cov_matrix = np.diag(
     np.array(
-        [
-            std_init_wolves,
-            std_init_sheep,
-            std_init_grass_proportion * GRID_WIDTH * GRID_HEIGHT,
-            std_wolf_gain_from_food,
-            std_sheep_gain_from_food,
-            std_wolf_reproduce,
-            std_sheep_reproduce,
-            std_grass_regrowth_time,
-        ]
+        [0.75 * np.sqrt(default_params[param]) for param in (init_only_params + variational_params)]
     )
-    ** 2
 )
+
+
+################################################################################
+
+
+def model_macro_data(model: AnCockrellModel):
+    """
+    Collect macroscale data from a model
+    :param model:
+    :return:
+    """
+    macroscale_data = np.zeros(UNIFIED_STATE_SPACE_DIMENSION, dtype=np.float64)
+
+    for idx, param in enumerate(state_vars):
+        macroscale_data[idx] = getattr(model, param)
+
+    for idx, param in enumerate(variational_params):
+        macroscale_data[len(state_vars) + idx] = getattr(model, param)
+
+    return macroscale_data
+
 
 ################################################################################
 # sample a virtual patient
 
 # sampled virtual patient parameters
-(
-    vp_init_wolves,
-    vp_init_sheep,
-    vp_init_grass,
-    vp_wolf_gain_from_food,
-    vp_sheep_gain_from_food,
-    vp_wolf_reproduce,
-    vp_sheep_reproduce,
-    vp_grass_regrowth_time,
-) = np.abs(multivariate_normal(mean=mean_vec, cov=cov_matrix).rvs())
+vp_init_params = default_params.copy()
+vp_init_param_sample = np.abs(multivariate_normal(mean=init_mean_vec, cov=init_cov_matrix).rvs())
+for sample_component, param_name in zip(
+    vp_init_param_sample,
+    (init_only_params + variational_params),
+):
+    vp_init_params[param_name] = (
+        round(sample_component) if isinstance(default_params[param_name], int) else sample_component
+    )
 
 # create model for virtual patient
-virtual_patient_model = WolfSheepGrassModel(
-    GRID_WIDTH=GRID_WIDTH,
-    GRID_HEIGHT=GRID_HEIGHT,
-    INIT_WOLVES=int(vp_init_wolves),
-    INIT_SHEEP=int(vp_init_sheep),
-    INIT_GRASS_PROPORTION=vp_init_grass / (GRID_WIDTH * GRID_HEIGHT),
-    WOLF_GAIN_FROM_FOOD=vp_wolf_gain_from_food,
-    SHEEP_GAIN_FROM_FOOD=vp_sheep_gain_from_food,
-    WOLF_REPRODUCE=vp_wolf_reproduce,
-    SHEEP_REPRODUCE=vp_sheep_reproduce,
-    GRASS_REGROWTH_TIME=vp_grass_regrowth_time,
-)
+virtual_patient_model = an_cockrell.AnCockrellModel(**vp_init_params)
 
 # evaluate the virtual patient's trajectory
-vp_wolf_counts = np.zeros(TIME_SPAN + 1, dtype=int)
-vp_sheep_counts = np.zeros(TIME_SPAN + 1, dtype=int)
-vp_grass_counts = np.zeros(TIME_SPAN + 1, dtype=int)
+vp_trajectory = np.zeros((TIME_SPAN + 1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
 
-vp_wolf_counts[0] = virtual_patient_model.num_wolves
-vp_sheep_counts[0] = virtual_patient_model.num_sheep
-vp_grass_counts[0] = np.sum(virtual_patient_model.grass)
-for t in range(1, TIME_SPAN + 1):
+vp_trajectory[0, :] = model_macro_data(virtual_patient_model)
+# noinspection PyTypeChecker
+for t in tqdm(range(1, TIME_SPAN + 1), desc="create virtual patient"):
     virtual_patient_model.time_step()
-    vp_wolf_counts[t] = virtual_patient_model.num_wolves
-    vp_sheep_counts[t] = virtual_patient_model.num_sheep
-    vp_grass_counts[t] = np.sum(virtual_patient_model.grass)
+    vp_trajectory[t, :] = model_macro_data(virtual_patient_model)
 
 ################################################################################
 # plot virtual patient
 
 if GRAPHS:
-    fig = plt.figure()
-    ax = fig.gca()
-    ax.plot(vp_wolf_counts, label="wolves")
-    ax.plot(vp_sheep_counts, label="sheep")
-    ax.plot(vp_grass_counts, label="grass")
-    ax.legend()
+    fig, axs = plt.subplots(4, 5, figsize=(6, 8))
+    for idx, state_var_name in enumerate(state_vars):
+        row, col = idx // 4, idx % 4
+        axs[row, col].plot(vp_trajectory[:, idx])
+        axs[row, col].set_title(state_var_name)
+    fig.tight_layout()
     fig.savefig(FILE_PREFIX + "virtual-patient.pdf")
     plt.close(fig)
 
@@ -372,7 +360,8 @@ if GRAPHS:
 
 def model_ensemble_from(means, covariances):
     """
-    Create an ensemble of models from a distribution
+    Create an ensemble of models from a distribution. Uses init-only
+    and variational parameters
 
     :param means:
     :param covariances:
@@ -381,29 +370,21 @@ def model_ensemble_from(means, covariances):
     mdl_ensemble = []
     distribution = multivariate_normal(mean=means, cov=covariances, allow_singular=True)
     for _ in range(ENSEMBLE_SIZE):
-        (
-            en_init_wolves,
-            en_init_sheep,
-            en_init_grass,
-            en_wolf_gain_from_food,
-            en_sheep_gain_from_food,
-            en_wolf_reproduce,
-            en_sheep_reproduce,
-            en_grass_regrowth_time,
-        ) = np.abs(distribution.rvs())
-        en_model = WolfSheepGrassModel(
-            GRID_WIDTH=GRID_WIDTH,
-            GRID_HEIGHT=GRID_HEIGHT,
-            INIT_WOLVES=int(en_init_wolves),
-            INIT_SHEEP=int(en_init_sheep),
-            INIT_GRASS_PROPORTION=en_init_grass / (GRID_WIDTH * GRID_HEIGHT),
-            WOLF_GAIN_FROM_FOOD=en_wolf_gain_from_food,
-            SHEEP_GAIN_FROM_FOOD=en_sheep_gain_from_food,
-            WOLF_REPRODUCE=en_wolf_reproduce,
-            SHEEP_REPRODUCE=en_sheep_reproduce,
-            GRASS_REGROWTH_TIME=en_grass_regrowth_time,
-        )
-        mdl_ensemble.append(en_model)
+        model_param_dict = default_params.copy()
+        sampled_params = np.abs(distribution.rvs())
+        for sample_component, param_name in zip(
+            sampled_params,
+            (init_only_params + variational_params),
+        ):
+            model_param_dict[param_name] = (
+                round(sample_component)
+                if isinstance(default_params[param_name], int)
+                else sample_component
+            )
+        # create model for virtual patient
+        model = AnCockrellModel(**model_param_dict)
+        mdl_ensemble.append(model)
+
     return mdl_ensemble
 
 
@@ -411,11 +392,10 @@ def model_ensemble_from(means, covariances):
 
 
 def modify_model(
-        model: WolfSheepGrassModel,
-        desired_state: np.ndarray,
-        *,
-        ignore_state_vars: bool = False,
-        fix_grass_clocks: bool = False,
+    model: AnCockrellModel,
+    desired_state: np.ndarray,
+    *,
+    ignore_state_vars: bool = False,
 ):
     """
     Modify a model's microstate to fit a given macrostate
@@ -423,106 +403,204 @@ def modify_model(
     :param model: model instance (encodes microstate)
     :param desired_state: desired macrostate for the model
     :param ignore_state_vars: if True, only alter parameters, not state variables
-    :param fix_grass_clocks: if True, make grass regrowth clocks consistent with new regrowth time
     :return: None
     """
-    (
-        num_wolves,
-        num_sheep,
-        num_grass,
-        wolf_gain_from_food,
-        sheep_gain_from_food,
-        wolf_reproduce,
-        sheep_reproduce,
-        grass_regrowth_time,
-    ) = np.abs(desired_state)
-    model.WOLF_GAIN_FROM_FOOD = wolf_gain_from_food
-    model.SHEEP_GAIN_FROM_FOOD = sheep_gain_from_food
-    model.WOLF_REPRODUCE = wolf_reproduce
-    model.SHEEP_REPRODUCE = sheep_reproduce
-    model.GRASS_REGROWTH_TIME = grass_regrowth_time
-    if fix_grass_clocks:
-        np.minimum(model.grass_clock, model.GRASS_REGROWTH_TIME, out=model.grass_clock)
+    np.abs(desired_state, out=desired_state)  # in-place absolute value
+
+    for param_idx, param_name in enumerate(variational_params, start=len(state_vars)):
+        prev_value = getattr(model, param_name, None)
+        assert prev_value is not None
+        if isinstance(prev_value, int):
+            setattr(model, param_name, round(float(desired_state[param_idx])))
+        else:
+            setattr(model, param_name, desired_state[param_idx])
 
     if ignore_state_vars:
         return
 
-    # Fix the number of wolves/sheep/grass by random spawning/killing.
+    # it's worth pointing out that, because of the cleanup-below-a-threshold code,
+    # these reset-by-scaling fields may not go to quite the right thing on the next
+    # time step. I'm not seeing an easy fix/alternative here, so ¯\_(ツ)_/¯ ?
 
-    num_wolves = int(num_wolves)
-    if num_wolves > model.num_wolves:
-        print(f"creating {num_wolves - model.num_wolves} new wolves")
-        for _ in range(num_wolves - model.num_wolves):
-            model.create_wolf()
-    elif num_wolves < model.num_wolves:
-        print(f"killing {model.num_wolves - num_wolves} wolves")
-        try:
-            for _ in range(model.num_wolves - num_wolves):
-                model.kill_random_wolf()
-        except RuntimeError as e:
-            print(e)
+    desired_t1ifn = desired_state[0]
+    model.T1IFN *= desired_t1ifn / model.total_T1IFN
 
-    num_sheep = int(num_sheep)
-    if num_sheep > model.num_sheep:
-        print(f"creating {num_sheep - model.num_sheep} new sheep")
-        for _ in range(num_sheep - model.num_sheep):
-            model.create_sheep()
-    elif num_sheep < model.num_sheep:
-        print(f"killing {model.num_sheep - num_sheep} sheep")
-        try:
-            for _ in range(model.num_sheep - num_sheep):
-                model.kill_random_sheep()
-        except RuntimeError as e:
-            print(e)
+    desired_tnf = desired_state[1]
+    model.TNF *= desired_tnf / model.total_TNF
 
-    num_grass = int(num_grass)
-    grass_present = np.sum(model.grass)
-    if num_grass > grass_present:
-        print(f"creating {num_grass - grass_present} new grass")
-        try:
-            for _ in range(num_grass - grass_present):
-                model.spawn_grass()
-        except RuntimeError as e:
-            print(e)
-    elif num_grass < grass_present:
-        print(f"killing {grass_present - num_grass} grass")
-        try:
-            for _ in range(grass_present - num_grass):
-                model.kill_random_grass()
-        except RuntimeError as e:
-            print(e)
+    desired_ifn_g = desired_state[2]
+    model.IFNg *= desired_ifn_g / model.total_IFNg
+
+    desired_il6 = desired_state[3]
+    model.IL6 *= desired_il6 / model.total_IL6
+
+    desired_il1 = desired_state[4]
+    model.IL1 *= desired_il1 / model.total_IL1
+
+    desired_il8 = desired_state[5]
+    model.IL8 *= desired_il8 / model.total_IL8
+
+    desired_il10 = desired_state[6]
+    model.IL10 *= desired_il10 / model.total_IL10
+
+    desired_il12 = desired_state[7]
+    model.IL12 *= desired_il12 / model.total_IL12
+
+    desired_il18 = desired_state[8]
+    model.IL18 *= desired_il18 / model.total_IL18
+
+    desired_total_extracellular_virus = desired_state[9]
+    model.extracellular_virus *= desired_total_extracellular_virus / model.total_extracellular_virus
+
+    desired_total_intracellular_virus = desired_state[10]
+    model.epi_intracellular_virus *= (
+        desired_total_intracellular_virus / model.total_intracellular_virus
+    )
+
+    model.apoptosis_eaten_counter = desired_state[11]  # no internal state here
+
+    # epithelium: infected, dead, apoptosed, healthy
+    desired_epithelium = np.array(np.round(desired_state[[12, 13, 14, 15]]), dtype=np.int64)
+    desired_total_epithelium = np.sum(desired_epithelium)
+    # Since these just samples from a normal distribution, the sampling might request more epithelium than
+    # there is room for. We try to do our best...
+    if desired_total_epithelium > model.GRID_WIDTH * model.GRID_HEIGHT:
+        # try a proportional rescale
+        desired_epithelium = np.array(
+            np.round(
+                desired_state[[12, 13, 14, 15]]
+                * (model.GRID_WIDTH * model.GRID_HEIGHT / desired_total_epithelium)
+            ),
+            dtype=np.int64,
+        )
+        assert np.all(desired_epithelium >= 0)
+        desired_total_epithelium = np.sum(desired_epithelium)
+        # if that didn't go all the way (b/c e.g. rounding) knock off random individuals until it's ok
+        assert model.GRID_WIDTH * model.GRID_HEIGHT > 0
+        while desired_total_epithelium > model.GRID_WIDTH * model.GRID_HEIGHT:
+            rand_idx = np.random.randint(4)
+            if desired_epithelium[rand_idx] > 0:
+                desired_epithelium[rand_idx] -= 1
+                desired_total_epithelium -= 1
+    # now we are certain that desired_epithelium hold attainable values
+
+    # first, kill off (empty) any excess in the epithelial categories
+    if model.infected_epithelium_count > desired_epithelium[0]:
+        infected_locations = np.array(np.where(model.epithelium == EpiType.Infected))
+        empty_locs = np.random.choice(
+            infected_locations.shape[1],
+            model.infected_epithelium_count - desired_epithelium[0],
+            replace=False,
+        )
+        for loc in empty_locs:
+            model.epithelium[infected_locations[:, loc]] = EpiType.Empty
+            model.epi_intracellular_virus[infected_locations[:, loc]] = 0
+
+    if model.dead_epithelium_count > desired_epithelium[1]:
+        dead_locations = np.array(np.where(model.epithelium == EpiType.Dead))
+        empty_locs = np.random.choice(
+            dead_locations.shape[1],
+            model.dead_epithelium_count - desired_epithelium[1],
+            replace=False,
+        )
+        for loc in empty_locs:
+            model.epithelium[dead_locations[:, loc]] = EpiType.Empty
+            model.epi_intracellular_virus[dead_locations[:, loc]] = 0
+
+    if model.apoptosed_epithelium_count > desired_epithelium[2]:
+        apoptosed_locations = np.array(np.where(model.epithelium == EpiType.Apoptosed))
+        empty_locs = np.random.choice(
+            apoptosed_locations.shape[1],
+            model.apoptosed_epithelium_count - desired_epithelium[2],
+            replace=False,
+        )
+        for loc in empty_locs:
+            model.epithelium[apoptosed_locations[:, loc]] = EpiType.Empty
+            model.epi_intracellular_virus[apoptosed_locations[:, loc]] = 0
+
+    if model.healthy_epithelium_count > desired_epithelium[3]:
+        healthy_locations = np.array(np.where(model.epithelium == EpiType.Healthy))
+        empty_locs = np.random.choice(
+            healthy_locations.shape[1],
+            model.healthy_epithelium_count - desired_epithelium[3],
+            replace=False,
+        )
+        for loc in empty_locs:
+            model.epithelium[healthy_locations[:, loc]] = EpiType.Empty
+            model.epi_intracellular_virus[healthy_locations[:, loc]] = 0
+
+    # second, spawn to make up for deficiency in the epithelial categories
+    # TODO: check the following epithelium state variables
+    #  epithelium_ros_damage_counter, epi_regrow_counter, epi_apoptosis_counter,
+    #  epi_intracellular_virus, epi_cell_membrane, epi_apoptosis_threshold,
+    #  epithelium_apoptosis_counter
+    if model.infected_epithelium_count < desired_epithelium[0]:
+        empty_locations = np.array(np.where(model.epithelium == EpiType.Empty))
+        infected_locs = np.random.choice(
+            empty_locations.shape[1],
+            desired_epithelium[0] - model.infected_epithelium_count,
+            replace=False,
+        )
+        for loc in infected_locs:
+            model.epithelium[empty_locations[:, loc]] = EpiType.Infected
+            # virus_invade_epi_cell says also: self.epi_intracellular_virus[invasion_mask] += 1
+            model.epi_intracellular_virus[empty_locations[:, loc]] += 1
+
+    if model.dead_epithelium_count < desired_epithelium[1]:
+        empty_locations = np.array(np.where(model.epithelium == EpiType.Empty))
+        dead_locs = np.random.choice(
+            empty_locations.shape[1],
+            desired_epithelium[1] - model.dead_epithelium_count,
+            replace=False,
+        )
+        for loc in dead_locs:
+            model.epithelium[empty_locations[:, loc]] = EpiType.Dead
+            model.epi_intracellular_virus[empty_locations[:, loc]] = 0
+
+    if model.apoptosed_epithelium_count < desired_epithelium[2]:
+        empty_locations = np.array(np.where(model.epithelium == EpiType.Empty))
+        apoptosed_locs = np.random.choice(
+            empty_locations.shape[1],
+            desired_epithelium[2] - model.apoptosed_epithelium_count,
+            replace=False,
+        )
+        for loc in apoptosed_locs:
+            model.epithelium[empty_locations[:, loc]] = EpiType.Apoptosed
+            model.epi_intracellular_virus[empty_locations[:, loc]] = 0
+
+    if model.healthy_epithelium_count < desired_epithelium[3]:
+        empty_locations = np.array(np.where(model.epithelium == EpiType.Empty))
+        healthy_locs = np.random.choice(
+            empty_locations.shape[1],
+            desired_epithelium[3] - model.healthy_epithelium_count,
+            replace=False,
+        )
+        for loc in healthy_locs:
+            model.epithelium[empty_locations[:, loc]] = EpiType.Healthy
+            model.epi_intracellular_virus[empty_locations[:, loc]] = 0
+
+    # 'system_health' -> we just have to ignore this, it's pretty much the same as the healthy epithelium count
+    # TODO: consider removing this as a state variable
+
+    # TODO:
+    #  "dc_count",
+    #  "nk_count",
+    #  "pmn_count",
+    #  "macro_count",
+
+    ################################################################################
 
 
-################################################################################
 # Kalman filter simulation
 ################################################################################
 
 # create ensemble of models for kalman filter
-model_ensemble = model_ensemble_from(mean_vec, cov_matrix)
-
-
-def model_macro_data(model: WolfSheepGrassModel):
-    """
-    Collect macroscale data from a model
-    :param model:
-    :return:
-    """
-    macroscale_data = np.zeros(UNIFIED_STATE_SPACE_DIMENSION, dtype=np.float64)
-    macroscale_data[0] = model.num_wolves
-    macroscale_data[1] = model.num_sheep
-    macroscale_data[2] = np.sum(model.grass)
-    macroscale_data[3] = model.WOLF_GAIN_FROM_FOOD
-    macroscale_data[4] = model.SHEEP_GAIN_FROM_FOOD
-    macroscale_data[5] = model.WOLF_REPRODUCE
-    macroscale_data[6] = model.SHEEP_REPRODUCE
-    macroscale_data[7] = model.GRASS_REGROWTH_TIME
-    return macroscale_data
-
+model_ensemble = model_ensemble_from(init_mean_vec, init_cov_matrix)
 
 # mean and covariances through time
-mean_vec = np.zeros((TIME_SPAN + 1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
-cov_matrix = np.zeros(
-    (TIME_SPAN + 1, UNIFIED_STATE_SPACE_DIMENSION, UNIFIED_STATE_SPACE_DIMENSION),
+mean_vec = np.full((TIME_SPAN + 1, UNIFIED_STATE_SPACE_DIMENSION), -1, dtype=np.float64)
+cov_matrix = np.full(
+    (TIME_SPAN + 1, UNIFIED_STATE_SPACE_DIMENSION, UNIFIED_STATE_SPACE_DIMENSION), -1,
     dtype=np.float64,
 )
 
@@ -722,16 +800,22 @@ while time < TIME_SPAN:
 
     # numerical cleanup: symmetrize and project onto pos def cone
     cov_matrix[time, :, :] = np.nan_to_num(
-        (np.nan_to_num(cov_matrix[time, :, :]) + np.nan_to_num(cov_matrix[time, :, :].T)) / 2.0)
-    eigenvalues, eigenvectors = scipy.linalg.eigh(cov_matrix[time, :, :], lower=True, check_finite=False)
+        (np.nan_to_num(cov_matrix[time, :, :]) + np.nan_to_num(cov_matrix[time, :, :].T)) / 2.0
+    )
+    eigenvalues, eigenvectors = scipy.linalg.eigh(
+        cov_matrix[time, :, :], lower=True, check_finite=False
+    )
     eigenvalues[:] = np.real(eigenvalues)  # just making sure
-    eigenvectors[:,:] = np.real(eigenvectors)  # just making sure
+    eigenvectors[:, :] = np.real(eigenvectors)  # just making sure
     # spectrum must be positive.
     # from the scipy code, it also can't have a max/min e-val ratio bigger than 1/(1e6*double machine epsilon)
     # and that's ~4503599627.370496=1/(1e6*np.finfo('d').eps), so a ratio bounded by 1e9 is ok.
-    cov_matrix[time, :, :] = eigenvectors @ np.diag(np.minimum(1e5,np.maximum(1e-4, eigenvalues))) @ eigenvectors.T
+    cov_matrix[time, :, :] = (
+        eigenvectors @ np.diag(np.minimum(1e5, np.maximum(1e-4, eigenvalues))) @ eigenvectors.T
+    )
     cov_matrix[time, :, :] = np.nan_to_num(
-        (np.nan_to_num(cov_matrix[time, :, :]) + np.nan_to_num(cov_matrix[time, :, :].T)) / 2.0)
+        (np.nan_to_num(cov_matrix[time, :, :]) + np.nan_to_num(cov_matrix[time, :, :].T)) / 2.0
+    )
 
     # recreate ensemble
     if RESAMPLE_MODELS:
