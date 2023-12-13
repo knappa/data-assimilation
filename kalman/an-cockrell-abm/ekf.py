@@ -1,12 +1,13 @@
 import argparse
 import csv
 import sys
+from typing import Dict
 
 import an_cockrell
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy
-from an_cockrell import AnCockrellModel, EpiType
+from an_cockrell import AnCockrellModel, EndoType, EpiType
 from scipy.stats import multivariate_normal
 from tqdm.auto import tqdm
 
@@ -52,6 +53,8 @@ else:
     parser.add_argument("--graphs", help="make pdf graphs", action="store_true")
 
     args = parser.parse_args()
+
+VERBOSE = False
 
 ################################################################################
 # constants
@@ -144,6 +147,7 @@ default_params = dict(
     evap_const_2=0.9,
 )
 
+# variables which reflect the macrostate of the model
 state_vars = [
     "total_T1IFN",
     "total_TNF",
@@ -161,13 +165,22 @@ state_vars = [
     "dead_epithelium_count",
     "apoptosed_epithelium_count",
     "healthy_epithelium_count",
-    "system_health",
+    # "system_health",
     "dc_count",
     "nk_count",
     "pmn_count",
     "macro_count",
 ]
 
+state_var_indices = {s: i for i, s in enumerate(state_vars)}
+
+# layout for graphing state variables.
+# Attempts to be mostly square, with possibly more rows than columns
+state_var_graphs_cols: int = int(np.floor(np.sqrt(len(state_vars))))
+state_var_graphs_rows: int = int(np.ceil(len(state_vars) / state_var_graphs_cols))
+state_var_graphs_figsize = (1.6 * state_var_graphs_rows, 1.6 * state_var_graphs_cols)
+
+# parameters of the model used only for initialization
 init_only_params = [
     "init_inoculum",
     "init_dcs",
@@ -175,6 +188,7 @@ init_only_params = [
     "init_macros",
 ]
 
+# true parameters of the model
 variational_params = [
     "macro_phago_recovery",
     "macro_phago_limit",
@@ -259,13 +273,25 @@ variational_params = [
     # "evap_const_2",
 ]
 
+variational_params_indices = {s: i + len(state_vars) for i, s in enumerate(state_vars)}
+
+# layout for graphing parameters.
+# Attempts to be mostly square, with possibly more rows than columns
+variational_params_graphs_cols: int = int(np.floor(np.sqrt(len(state_vars))))
+variational_params_graphs_rows: int = int(np.ceil(len(state_vars) / state_var_graphs_cols))
+variational_params_graphs_figsize = (
+    1.6 * variational_params_graphs_rows,
+    1.6 * variational_params_graphs_cols,
+)
+
 assert all(param in default_params for param in variational_params)
 
 TIME_SPAN = 2016
 SAMPLE_INTERVAL = 48  # how often to make measurements
 ENSEMBLE_SIZE = 50
 UNIFIED_STATE_SPACE_DIMENSION = len(state_vars) + len(variational_params)
-OBSERVABLES = "extracellular_virus" if not hasattr(args, "measurements") else args.measurements
+OBSERVABLES = ["extracellular_virus"] if not hasattr(args, "measurements") else args.measurements
+OBSERVABLE_VAR_NAMES = ["total_" + name for name in OBSERVABLES]
 
 RESAMPLE_MODELS = False
 
@@ -345,9 +371,15 @@ for t in tqdm(range(1, TIME_SPAN + 1), desc="create virtual patient"):
 # plot virtual patient
 
 if GRAPHS:
-    fig, axs = plt.subplots(4, 5, figsize=(6, 8))
+    fig, axs = plt.subplots(
+        nrows=state_var_graphs_rows,
+        ncols=state_var_graphs_cols,
+        figsize=state_var_graphs_figsize,
+        sharex=True,
+        sharey=False,
+    )
     for idx, state_var_name in enumerate(state_vars):
-        row, col = idx // 4, idx % 4
+        row, col = idx // state_var_graphs_cols, idx % state_var_graphs_cols
         axs[row, col].plot(vp_trajectory[:, idx])
         axs[row, col].set_title(state_var_name)
     fig.tight_layout()
@@ -422,56 +454,74 @@ def modify_model(
     # these reset-by-scaling fields may not go to quite the right thing on the next
     # time step. I'm not seeing an easy fix/alternative here, so ¯\_(ツ)_/¯ ?
 
-    desired_t1ifn = desired_state[0]
+    desired_t1ifn = desired_state[state_var_indices["total_T1IFN"]]
     model.T1IFN *= desired_t1ifn / model.total_T1IFN
 
-    desired_tnf = desired_state[1]
+    desired_tnf = desired_state[state_var_indices["total_TNF"]]
     model.TNF *= desired_tnf / model.total_TNF
 
-    desired_ifn_g = desired_state[2]
+    desired_ifn_g = desired_state[state_var_indices["total_IFNg"]]
     model.IFNg *= desired_ifn_g / model.total_IFNg
 
-    desired_il6 = desired_state[3]
+    desired_il6 = desired_state[state_var_indices["total_IL6"]]
     model.IL6 *= desired_il6 / model.total_IL6
 
-    desired_il1 = desired_state[4]
+    desired_il1 = desired_state[state_var_indices["total_IL1"]]
     model.IL1 *= desired_il1 / model.total_IL1
 
-    desired_il8 = desired_state[5]
+    desired_il8 = desired_state[state_var_indices["total_IL8"]]
     model.IL8 *= desired_il8 / model.total_IL8
 
-    desired_il10 = desired_state[6]
+    desired_il10 = desired_state[state_var_indices["total_IL10"]]
     model.IL10 *= desired_il10 / model.total_IL10
 
-    desired_il12 = desired_state[7]
+    desired_il12 = desired_state[state_var_indices["total_IL12"]]
     model.IL12 *= desired_il12 / model.total_IL12
 
-    desired_il18 = desired_state[8]
+    desired_il18 = desired_state[state_var_indices["total_IL18"]]
     model.IL18 *= desired_il18 / model.total_IL18
 
-    desired_total_extracellular_virus = desired_state[9]
+    desired_total_extracellular_virus = desired_state[
+        state_var_indices["total_extracellular_virus"]
+    ]
     model.extracellular_virus *= desired_total_extracellular_virus / model.total_extracellular_virus
 
-    desired_total_intracellular_virus = desired_state[10]
-    model.epi_intracellular_virus *= (
-        desired_total_intracellular_virus / model.total_intracellular_virus
+    desired_total_intracellular_virus = desired_state[
+        state_var_indices["total_intracellular_virus"]
+    ]
+    # TODO: how close does this get? do we have to deal with discretization error?
+    np.rint(
+        model.epi_intracellular_virus[:]
+        * (desired_total_intracellular_virus / model.total_intracellular_virus),
+        out=model.epi_intracellular_virus,
     )
 
-    model.apoptosis_eaten_counter = desired_state[11]  # no internal state here
+    model.apoptosis_eaten_counter = int(desired_state[
+        state_var_indices["apoptosis_eaten_counter"]
+    ])  # no internal state here
 
     # epithelium: infected, dead, apoptosed, healthy
-    desired_epithelium = np.array(np.round(desired_state[[12, 13, 14, 15]]), dtype=np.int64)
+    desired_epithelium = np.array(
+        np.round(
+            desired_state[
+                [
+                    state_var_indices["infected_epithelium_count"],
+                    state_var_indices["dead_epithelium_count"],
+                    state_var_indices["apoptosed_epithelium_count"],
+                    state_var_indices["healthy_epithelium_count"],
+                ]
+            ]
+        ),
+        dtype=np.int64,
+    )
     desired_total_epithelium = np.sum(desired_epithelium)
     # Since these just samples from a normal distribution, the sampling might request more epithelium than
     # there is room for. We try to do our best...
     if desired_total_epithelium > model.GRID_WIDTH * model.GRID_HEIGHT:
         # try a proportional rescale
-        desired_epithelium = np.array(
-            np.round(
-                desired_state[[12, 13, 14, 15]]
-                * (model.GRID_WIDTH * model.GRID_HEIGHT / desired_total_epithelium)
-            ),
-            dtype=np.int64,
+        np.rint(
+                desired_epithelium
+                * (model.GRID_WIDTH * model.GRID_HEIGHT / desired_total_epithelium), out=desired_epithelium
         )
         assert np.all(desired_epithelium >= 0)
         desired_total_epithelium = np.sum(desired_epithelium)
@@ -482,7 +532,7 @@ def modify_model(
             if desired_epithelium[rand_idx] > 0:
                 desired_epithelium[rand_idx] -= 1
                 desired_total_epithelium -= 1
-    # now we are certain that desired_epithelium hold attainable values
+    # now we are certain that desired_epithelium holds attainable values
 
     # first, kill off (empty) any excess in the epithelial categories
     if model.infected_epithelium_count > desired_epithelium[0]:
@@ -579,18 +629,80 @@ def modify_model(
             model.epithelium[empty_locations[:, loc]] = EpiType.Healthy
             model.epi_intracellular_virus[empty_locations[:, loc]] = 0
 
-    # 'system_health' -> we just have to ignore this, it's pretty much the same as the healthy epithelium count
-    # TODO: consider removing this as a state variable
+    dc_delta = desired_state[state_var_indices["dc_count"]] - model.dc_count
+    if dc_delta > 0:
+        for _ in range(dc_delta):
+            model.create_dc()
+    elif dc_delta < 0:
+        # need fewer dcs, kill them randomly
+        dcs_to_kill = np.random.choice(model.num_dcs, min(-dc_delta, model.num_dcs), replace=False)
+        dc_idcs = np.where(model.dc_mask)[0]
+        model.dc_mask[dc_idcs[dcs_to_kill]] = False
 
-    # TODO:
-    #  "dc_count",
-    #  "nk_count",
-    #  "pmn_count",
-    #  "macro_count",
+    nk_delta = desired_state[state_var_indices["nk_count"]] - model.nk_count
+    if nk_delta > 0:
+        model.create_nk(number=int(nk_delta))
+    elif nk_delta < 0:
+        # need fewer nks, kill them randomly
+        nks_to_kill = np.random.choice(model.num_nks, min(-nk_delta, model.num_nks), replace=False)
+        nk_idcs = np.where(model.nk_mask)[0]
+        model.nk_mask[nk_idcs[nks_to_kill]] = False
 
-    ################################################################################
+    pmn_delta = desired_state[state_var_indices["pmn_count"]] - model.pmn_count
+    if pmn_delta > 0:
+        # need more pmns
+        # adapted from activated_endo_update
+        pmn_spawn_list = list(
+            zip(
+                *np.where(
+                    (model.endothelial_adhesion_counter > model.activated_endo_adhesion_threshold)
+                    & (model.endothelial_activation == EndoType.Activated)
+                    & (np.random.rand(*model.geometry) < model.activated_endo_pmn_spawn_prob)
+                )
+            )
+        )
+        if len(pmn_spawn_list) > 0:
+            for loc_idx in np.random.choice(len(pmn_spawn_list), pmn_delta):
+                model.create_pmn(
+                    location=pmn_spawn_list[loc_idx],
+                    age=0,
+                    jump_dist=model.activated_endo_pmn_spawn_dist,
+                )
+        else:
+            if VERBOSE:
+                print("Nowhere to put desired pmns")
+    elif pmn_delta < 0:
+        # need fewer pmns, kill them randomly
+        pmns_to_kill = np.random.choice(
+            model.num_pmns, min(-pmn_delta, model.num_pmns), replace=False
+        )
+        pmn_idcs = np.where(model.pmn_mask)[0]
+        model.pmn_mask[pmn_idcs[pmns_to_kill]] = False
+
+    macro_delta = desired_state[state_var_indices["macro_count"]] - model.macro_count
+    if macro_delta > 0:
+        # need more macrophages, create them as in init in random locations
+        for _ in range(macro_delta):
+            model.create_macro(
+                pre_il1=0,
+                pre_il18=0,
+                inflammasome_primed=False,
+                inflammasome_active=False,
+                macro_activation_level=0,
+                pyroptosis_counter=0,
+                virus_eaten=0,
+                cells_eaten=0,
+            )
+    elif macro_delta < 0:
+        # need fewer macrophages, kill them randomly
+        macros_to_kill = np.random.choice(
+            model.num_macros, min(-macro_delta, model.num_macros), replace=False
+        )
+        macro_idcs = np.where(model.macro_mask)[0]
+        model.macro_mask[macro_idcs[macros_to_kill]] = False
 
 
+################################################################################
 # Kalman filter simulation
 ################################################################################
 
@@ -600,7 +712,8 @@ model_ensemble = model_ensemble_from(init_mean_vec, init_cov_matrix)
 # mean and covariances through time
 mean_vec = np.full((TIME_SPAN + 1, UNIFIED_STATE_SPACE_DIMENSION), -1, dtype=np.float64)
 cov_matrix = np.full(
-    (TIME_SPAN + 1, UNIFIED_STATE_SPACE_DIMENSION, UNIFIED_STATE_SPACE_DIMENSION), -1,
+    (TIME_SPAN + 1, UNIFIED_STATE_SPACE_DIMENSION, UNIFIED_STATE_SPACE_DIMENSION),
+    -1,
     dtype=np.float64,
 )
 
@@ -637,99 +750,91 @@ while time < TIME_SPAN:
     # plot state variables
 
     if GRAPHS:
-        fig, axs = plt.subplots(3, figsize=(6, 6))
-        plural = {"wolf": "wolves", "sheep": "sheep", "grass": "grass"}
-        vp_data = {
-            "wolf": vp_wolf_counts,
-            "sheep": vp_sheep_counts,
-            "grass": vp_grass_counts,
-        }
-        max_scales = {
-            "wolf": mean_init_wolves,
-            "sheep": mean_init_sheep,
-            "grass": mean_init_grass_proportion * GRID_HEIGHT * GRID_WIDTH,
-        }
-        for idx, state_var_name in enumerate(["wolf", "sheep", "grass"]):
-            axs[idx].plot(
-                vp_data[state_var_name][: (cycle + 1) * SAMPLE_INTERVAL + 1],
+        fig, axs = plt.subplots(
+            nrows=state_var_graphs_rows,
+            ncols=state_var_graphs_cols,
+            figsize=state_var_graphs_figsize,
+            sharex=True,
+            sharey=False,
+        )
+        for idx, state_var_name in enumerate(state_vars):
+            row, col = idx // state_var_graphs_cols, idx % state_var_graphs_cols
+            axs[row, col].plot(
+                vp_trajectory[: (cycle + 1) * SAMPLE_INTERVAL + 1, idx],
                 label="true value",
                 color="black",
             )
-            axs[idx].plot(
+            axs[row, col].plot(
                 range(cycle * SAMPLE_INTERVAL + 1),
                 mean_vec[: cycle * SAMPLE_INTERVAL + 1, idx],
-                label="estimate",
-            )
-            axs[idx].fill_between(
-                range(cycle * SAMPLE_INTERVAL + 1),
-                np.maximum(
-                    0.0,
-                    mean_vec[: cycle * SAMPLE_INTERVAL + 1, idx]
-                    - np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, idx, idx]),
-                ),
-                np.minimum(
-                    10 * max_scales[state_var_name],
-                    mean_vec[: cycle * SAMPLE_INTERVAL + 1, idx]
-                    + np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, idx, idx]),
-                ),
-                color="gray",
-                alpha=0.35,
-            )
-            axs[idx].set_title(state_var_name)
-            axs[idx].legend()
-        fig.tight_layout()
-        fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-match.pdf")
-        plt.close(fig)
-
-    ################################################################################
-    # plot state variables
-
-    if GRAPHS:
-        params = [
-            "wolf gain from food",
-            "sheep gain from food",
-            "wolf reproduce",
-            "sheep reproduce",
-            "grass regrowth time",
-        ]
-        vp_param_values = dict(
-            zip(
-                params,
-                [
-                    vp_wolf_gain_from_food,
-                    vp_sheep_gain_from_food,
-                    vp_wolf_reproduce,
-                    vp_sheep_reproduce,
-                    vp_grass_regrowth_time,
-                ],
-            )
-        )
-
-        fig, axs = plt.subplots(3, 2, figsize=(8, 8))
-        for idx, param_name in enumerate(params):
-            row, col = idx % 3, idx // 3
-            axs[row, col].plot(
-                [0, (cycle + 1) * SAMPLE_INTERVAL + 1],
-                [vp_param_values[param_name]] * 2,
-                label="true value",
-                color="black",
-            )
-            axs[row, col].plot(
-                range(cycle * SAMPLE_INTERVAL + 1),
-                mean_vec[: cycle * SAMPLE_INTERVAL + 1, 3 + idx],
                 label="estimate",
             )
             axs[row, col].fill_between(
                 range(cycle * SAMPLE_INTERVAL + 1),
                 np.maximum(
                     0.0,
-                    mean_vec[: cycle * SAMPLE_INTERVAL + 1, 3 + idx]
-                    - np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, 3 + idx, 3 + idx]),
+                    mean_vec[: cycle * SAMPLE_INTERVAL + 1, idx]
+                    - np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, idx, idx]),
+                ),
+                mean_vec[: cycle * SAMPLE_INTERVAL + 1, idx]
+                + np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, idx, idx]),
+                color="gray",
+                alpha=0.35,
+            )
+            axs[row, col].set_title(state_var_name)
+            axs[row, col].legend()
+        fig.tight_layout()
+        fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-match.pdf")
+        plt.close(fig)
+
+    ################################################################################
+    # plot parameters
+
+    if GRAPHS:
+        fig, axs = plt.subplots(
+            nrows=variational_params_graphs_rows,
+            ncols=variational_params_graphs_cols,
+            figsize=variational_params_graphs_figsize,
+            sharex=True,
+            sharey=False,
+        )
+        for idx, param_name in enumerate(state_vars):
+            row, col = idx // variational_params_graphs_cols, idx % variational_params_graphs_cols
+
+            axs[row, col].plot(
+                [0, (cycle + 1) * SAMPLE_INTERVAL + 1],
+                [vp_init_params[param_name]] * 2,
+                label="true value",
+                color="black",
+            )
+            axs[row, col].plot(
+                range(cycle * SAMPLE_INTERVAL + 1),
+                mean_vec[: cycle * SAMPLE_INTERVAL + 1, len(state_vars) + idx],
+                label="estimate",
+            )
+            axs[row, col].fill_between(
+                range(cycle * SAMPLE_INTERVAL + 1),
+                np.maximum(
+                    0.0,
+                    mean_vec[: cycle * SAMPLE_INTERVAL + 1, len(state_vars) + idx]
+                    - np.sqrt(
+                        cov_matrix[
+                            : cycle * SAMPLE_INTERVAL + 1,
+                            len(state_vars) + idx,
+                            len(state_vars) + idx,
+                        ]
+                    ),
                 ),
                 np.minimum(
-                    10 * vp_param_values[param_name],
-                    mean_vec[: cycle * SAMPLE_INTERVAL + 1, 3 + idx]
-                    + np.sqrt(cov_matrix[: cycle * SAMPLE_INTERVAL + 1, 3 + idx, 3 + idx]),
+                    10 * vp_init_params[param_name],
+                    mean_vec[: cycle * SAMPLE_INTERVAL + 1, len(state_vars) + idx]
+                    + np.sqrt(
+                        cov_matrix[
+                            : cycle * SAMPLE_INTERVAL + 1,
+                            len(state_vars) + idx,
+                            len(state_vars) + idx,
+                        ]
+                    ),
                 ),
                 color="gray",
                 alpha=0.35,
@@ -744,52 +849,31 @@ while time < TIME_SPAN:
     ################################################################################
     # Kalman filter
 
-    match OBSERVABLE:
-        case "wolves":
-            R = 2.0
-            H = np.zeros((1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
-            H[0, 0] = 1.0  # observe wolves
-            observation = vp_wolf_counts[time]
-        case "sheep":
-            R = 2.0
-            H = np.zeros((1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
-            H[0, 1] = 1.0  # observe sheep
-            observation = vp_sheep_counts[time]
-        case "grass":
-            R = 1.0
-            H = np.zeros((1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
-            H[0, 2] = 1.0  # observe grass
-            observation = vp_grass_counts[time]
-        case "wolves+grass":
-            R = np.diag([2.0, 1.0])
-            H = np.zeros((2, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
-            H[0, 0] = 1.0  # observe wolves
-            H[1, 2] = 1.0  # observe grass
-            observation = np.array([vp_wolf_counts[time], vp_grass_counts[time]], dtype=np.float64)
-        case "sheep+grass":
-            R = np.diag([2.0, 1.0])
-            H = np.zeros((2, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
-            H[0, 1] = 1.0  # observe sheep
-            H[1, 2] = 1.0  # observe grass
-            observation = np.array([vp_sheep_counts[time], vp_grass_counts[time]], dtype=np.float64)
-        case "wolves+sheep":
-            R = np.diag([2.0, 2.0])
-            H = np.zeros((2, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
-            H[0, 0] = 1.0  # observe wolves
-            H[1, 1] = 1.0  # observe sheep
-            observation = np.array([vp_wolf_counts[time], vp_sheep_counts[time]], dtype=np.float64)
-        case "wolves+sheep+grass":
-            R = np.diag([2.0, 2.0, 1.0])
-            H = np.zeros((3, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
-            H[0, 0] = 1.0  # observe wolves
-            H[1, 1] = 1.0  # observe sheep
-            H[2, 2] = 1.0  # observe sheep
-            observation = np.array(
-                [vp_wolf_counts[time], vp_sheep_counts[time], vp_grass_counts[time]],
-                dtype=np.float64,
-            )
-        case _:
-            raise RuntimeError("unknown observable?")
+    num_observables = len(OBSERVABLE_VAR_NAMES)
+
+    # rs encodes the uncertainty in the various observations
+    rs: Dict[str, float] = {
+        "total_T1IFN": 1.0,
+        "total_TNF": 1.0,
+        "total_IFNg": 1.0,
+        "total_IL6": 1.0,
+        "total_IL1": 1.0,
+        "total_IL8": 1.0,
+        "total_IL10": 1.0,
+        "total_IL12": 1.0,
+        "total_IL18": 1.0,
+        "total_extracellular_virus": 1.0,
+    }
+    R = np.diag([rs[obs_name] for obs_name in OBSERVABLE_VAR_NAMES])
+
+    H = np.zeros((num_observables, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
+    for h_idx, obs_name in enumerate(OBSERVABLE_VAR_NAMES):
+        H[h_idx, state_var_indices[obs_name]] = 1.0
+
+    observation = np.array(
+        [vp_trajectory[time, state_var_indices[obs_name]] for obs_name in OBSERVABLE_VAR_NAMES],
+        dtype=np.float64,
+    )
 
     v = observation - (H @ mean_vec[time, :])
     S = H @ cov_matrix[time, :, :] @ H.T + R
