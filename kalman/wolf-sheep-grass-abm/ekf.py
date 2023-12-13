@@ -416,7 +416,7 @@ while time < TIME_SPAN:
         plt.close(fig)
 
     ################################################################################
-    # plot state variables
+    # plot parameters
 
     if GRAPHS:
         params = [
