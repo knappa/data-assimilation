@@ -7,6 +7,8 @@ import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 
+GRAPHS=False
+
 # must match params from an-cockrell-runner.py
 variational_params = [
     "init_inoculum",
@@ -122,7 +124,8 @@ sensitivity_dict = dict(
 )
 print(sensitivity_dict)
 
-plt.plot(np.abs(least_squares_sol[np.argsort(np.abs(least_squares_sol))]))
+if GRAPHS:
+    plt.plot(np.abs(least_squares_sol[np.argsort(np.abs(least_squares_sol))]))
 
 epsilon = np.exp(-25)
 log_min_sys_health = np.log(np.maximum(epsilon, np.min(f["system_health"][()], axis=1)))
@@ -143,27 +146,32 @@ log_least_squares_sol, log_residuals, log_rank, log_sing_vals = np.linalg.lstsq(
     log_param_list_filtered_aug.T, log_min_sys_health, rcond=None
 )
 
-plt.plot(np.abs(least_squares_sol[np.argsort(np.abs(least_squares_sol))]))
+if GRAPHS:
+    plt.plot(np.abs(least_squares_sol[np.argsort(np.abs(least_squares_sol))]))
 
 log_sort_indices = np.argsort(np.abs(log_least_squares_sol))
 log_sensitivity_dict = dict(
     zip(variational_params_filtered_aug[log_sort_indices], log_least_squares_sol[log_sort_indices])
 )
 print(log_sensitivity_dict)
-plt.plot(np.abs(least_squares_sol[np.argsort(np.abs(least_squares_sol))]))
 
-fig, ax = plt.subplots()
-ax.scatter(np.abs(least_squares_sol)[:-1], np.abs(log_least_squares_sol)[:-1])
-plt.xlabel("abs sensitivity")
-plt.ylabel("abs log sensitivity")
-for i, txt in enumerate(variational_params_filtered):
-    ax.annotate(txt, (np.abs(least_squares_sol)[i], np.abs(log_least_squares_sol)[i]))
+if GRAPHS:
+    plt.plot(np.abs(least_squares_sol[np.argsort(np.abs(least_squares_sol))]))
+
+if GRAPHS:
+    fig, ax = plt.subplots()
+    ax.scatter(np.abs(least_squares_sol)[:-1], np.abs(log_least_squares_sol)[:-1])
+    plt.xlabel("abs sensitivity")
+    plt.ylabel("abs log sensitivity")
+    for i, txt in enumerate(variational_params_filtered):
+        ax.annotate(txt, (np.abs(least_squares_sol)[i], np.abs(log_least_squares_sol)[i]))
 
 ################################################################################
 
 system_health = f["system_health"][()]
 
-plt.hist(system_health.reshape(-1), bins=100, density=True)
+if GRAPHS:
+    plt.hist(system_health.reshape(-1), bins=100, density=True)
 
 # compute sensitivity matrix
 system_health_sensitivity, sh_residuals, sh_rank, sh_sing_vals = np.linalg.lstsq(
@@ -182,53 +190,58 @@ log_system_health = np.log(np.maximum(np.exp(-25), system_health))
 ) = np.linalg.lstsq(log_param_list_filtered_aug.T, log_system_health, rcond=None)
 system_health_log_sensitivity_column_norm = np.linalg.norm(system_health_log_sensitivity, axis=1)
 
-# matrix plot of sensitivity matrix, in chunks
-fig, axs = plt.subplots(8, figsize=(8, 20))
-for plt_idx in range(8):
-    axs[plt_idx].imshow(
-        np.abs(system_health_sensitivity[:, plt_idx * 252 : (plt_idx + 1) * 252]), aspect=1
-    )
-fig.tight_layout()
+if GRAPHS:
+    # matrix plot of sensitivity matrix, in chunks
+    fig, axs = plt.subplots(8, figsize=(8, 20))
+    for plt_idx in range(8):
+        axs[plt_idx].imshow(
+            np.abs(system_health_sensitivity[:, plt_idx * 252 : (plt_idx + 1) * 252]), aspect=1
+        )
+    fig.tight_layout()
 
-# matrix plot of sensitivity matrix; relative time contribution, in chunks
-fig, axs = plt.subplots(8, figsize=(8, 20))
-for plt_idx in range(8):
-    axs[plt_idx].imshow(
-        np.abs(system_health_sensitivity[:, plt_idx * 252 : (plt_idx + 1) * 252])
-        / system_health_sensitivity_column_norm[:, np.newaxis],
-        aspect=1,
-    )
-fig.tight_layout()
+if GRAPHS:
+    # matrix plot of sensitivity matrix; relative time contribution, in chunks
+    fig, axs = plt.subplots(8, figsize=(8, 20))
+    for plt_idx in range(8):
+        axs[plt_idx].imshow(
+            np.abs(system_health_sensitivity[:, plt_idx * 252 : (plt_idx + 1) * 252])
+            / system_health_sensitivity_column_norm[:, np.newaxis],
+            aspect=1,
+        )
+    fig.tight_layout()
 
-# matrix plot of log sensitivity matrix, in chunks
-fig, axs = plt.subplots(8, figsize=(8, 20))
-for plt_idx in range(8):
-    axs[plt_idx].imshow(
-        np.abs(system_health_log_sensitivity[:, plt_idx * 252 : (plt_idx + 1) * 252]),
-        aspect=1,
-    )
-fig.tight_layout()
+if GRAPHS:
+    # matrix plot of log sensitivity matrix, in chunks
+    fig, axs = plt.subplots(8, figsize=(8, 20))
+    for plt_idx in range(8):
+        axs[plt_idx].imshow(
+            np.abs(system_health_log_sensitivity[:, plt_idx * 252 : (plt_idx + 1) * 252]),
+            aspect=1,
+        )
+    fig.tight_layout()
 
-# matrix plot of log sensitivity matrix; relative time contribution, in chunks
-fig, axs = plt.subplots(8, figsize=(8, 20))
-for plt_idx in range(8):
-    axs[plt_idx].imshow(
-        np.abs(system_health_log_sensitivity[:, plt_idx * 252 : (plt_idx + 1) * 252])
-        / system_health_log_sensitivity_column_norm[:, np.newaxis],
-        aspect=1,
-    )
-fig.tight_layout()
+if GRAPHS:
+    # matrix plot of log sensitivity matrix; relative time contribution, in chunks
+    fig, axs = plt.subplots(8, figsize=(8, 20))
+    for plt_idx in range(8):
+        axs[plt_idx].imshow(
+            np.abs(system_health_log_sensitivity[:, plt_idx * 252 : (plt_idx + 1) * 252])
+            / system_health_log_sensitivity_column_norm[:, np.newaxis],
+            aspect=1,
+        )
+    fig.tight_layout()
 
-# plot log sensitivity of components that are ever above min_sensitivity
-min_sensitivity = 0.25
-max_log_sensitivity = np.max(np.abs(system_health_log_sensitivity), axis=1)
-plt.figure()
-plt.plot(
-    system_health_log_sensitivity.T[:, max_log_sensitivity > min_sensitivity][:, :-1],
-    label=variational_params_filtered_aug[max_log_sensitivity > min_sensitivity][:-1],
-)
-plt.legend()
-plt.tight_layout()
+if GRAPHS:
+    # plot log sensitivity of components that are ever above min_sensitivity
+    min_sensitivity = 0.25
+    max_log_sensitivity = np.max(np.abs(system_health_log_sensitivity), axis=1)
+    plt.figure()
+    plt.plot(
+        system_health_log_sensitivity.T[:, max_log_sensitivity > min_sensitivity][:, :-1],
+        label=variational_params_filtered_aug[max_log_sensitivity > min_sensitivity][:-1],
+    )
+    plt.legend()
+    plt.tight_layout()
 
 # compute column-wise norms
 norm_sensitivity = np.linalg.norm(np.abs(system_health_sensitivity), axis=1)
@@ -242,26 +255,28 @@ indices_top_ten_log = np.argsort(norm_log_sensitivity[:-1])[-10:]
 names_top_ten = set(variational_params_filtered_aug[indices_top_ten])
 names_top_ten_log = set(variational_params_filtered_aug[indices_top_ten_log])
 
-# plot columns of log sensitivity matrix as time series, for top ten components
-plt.figure()
-plt.plot(
-    system_health_log_sensitivity.T[:, indices_top_ten_log],
-    label=variational_params_filtered_aug[indices_top_ten_log],
-)
-plt.legend()
-plt.tight_layout()
+if GRAPHS:
+    # plot columns of log sensitivity matrix as time series, for top ten components
+    plt.figure()
+    plt.plot(
+        system_health_log_sensitivity.T[:, indices_top_ten_log],
+        label=variational_params_filtered_aug[indices_top_ten_log],
+    )
+    plt.legend()
+    plt.tight_layout()
 
 # how different are these?
 print(set(names_top_ten).intersection(names_top_ten_log))
 print(set(names_top_ten).union(names_top_ten_log))
 
-# scatter
-fig, ax = plt.subplots()
-ax.scatter(norm_sensitivity[:-1], norm_log_sensitivity[:-1])
-plt.xlabel("sensitivity")
-plt.ylabel("log sensitivity")
-for i, txt in enumerate(variational_params_filtered):
-    ax.annotate(txt, (norm_sensitivity[i], norm_log_sensitivity[i]))
+if GRAPHS:
+    # scatter
+    fig, ax = plt.subplots()
+    ax.scatter(norm_sensitivity[:-1], norm_log_sensitivity[:-1])
+    plt.xlabel("sensitivity")
+    plt.ylabel("log sensitivity")
+    for i, txt in enumerate(variational_params_filtered):
+        ax.annotate(txt, (norm_sensitivity[i], norm_log_sensitivity[i]))
 
 ################################################################################
 # sensitivity by early/late infection
@@ -276,8 +291,9 @@ early_system_health_log_sensitivity_column_norm = np.linalg.norm(
     early_system_health_log_sensitivity, axis=1
 )
 
-fig = plt.figure()
-plt.plot(early_system_health_log_sensitivity.T[:, :-1])
+if GRAPHS:
+    fig = plt.figure()
+    plt.plot(early_system_health_log_sensitivity.T[:, :-1])
 
 early_indices_top_ten_log = np.argsort(early_system_health_log_sensitivity_column_norm[:-1])[-10:]
 
@@ -298,29 +314,29 @@ full_data_log_sensitivity_column_norm = np.linalg.norm(full_data_log_sensitivity
 indices_full = np.argsort(full_data_log_sensitivity_column_norm[:-1])[-10:]
 names_full = set(variational_params_filtered_aug[indices_full])
 
-fig, axs = plt.subplots(4, 4)
-for idx, name in enumerate([k for k in f.keys() if k != "param_list"]):
-    row, col = idx // 4, idx % 4
-    axs[row, col].plot(
-        full_data_log_sensitivity.reshape(full_data_log_sensitivity.shape[0], *full_data.shape[1:])[
-            :, idx, :
-        ].T
-    )
-    axs[row, col].set_title(name)
-fig.tight_layout()
+if GRAPHS:
+    fig, axs = plt.subplots(4, 4)
+    for idx, name in enumerate([k for k in f.keys() if k != "param_list"]):
+        row, col = idx // 4, idx % 4
+        axs[row, col].plot(
+            full_data_log_sensitivity.reshape(full_data_log_sensitivity.shape[0], *full_data.shape[1:])[
+                :, idx, :
+            ].T
+        )
+        axs[row, col].set_title(name)
+    fig.tight_layout()
 
 
-fig, axs = plt.subplots(4, 4, sharex=True, layout="constrained")
-lines = None
-for idx, name in enumerate([k for k in f.keys() if k != "param_list"]):
-    row, col = idx // 4, idx % 4
-    lines = axs[row, col].plot(
-        full_data_log_sensitivity.reshape(full_data_log_sensitivity.shape[0], *full_data.shape[1:])[
-            indices_full[::-1], idx, :
-        ].T,
-        label=variational_params_filtered_aug[indices_full[::-1]],
-    )
-    axs[row, col].set_title(name)
-fig.legend(lines, variational_params_filtered_aug[indices_full][::-1], loc="outside right")
-
-fig.tight_layout()
+if GRAPHS:
+    fig, axs = plt.subplots(4, 4, sharex=True, layout="constrained")
+    lines = None
+    for idx, name in enumerate([k for k in f.keys() if k != "param_list"]):
+        row, col = idx // 4, idx % 4
+        lines = axs[row, col].plot(
+            full_data_log_sensitivity.reshape(full_data_log_sensitivity.shape[0], *full_data.shape[1:])[
+                indices_full[::-1], idx, :
+            ].T,
+            label=variational_params_filtered_aug[indices_full[::-1]],
+        )
+        axs[row, col].set_title(name)
+    fig.legend(lines, variational_params_filtered_aug[indices_full][::-1], loc="outside right")
