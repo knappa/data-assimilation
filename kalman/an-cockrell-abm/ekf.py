@@ -496,9 +496,9 @@ def modify_model(
         out=model.epi_intracellular_virus,
     )
 
-    model.apoptosis_eaten_counter = int(desired_state[
-        state_var_indices["apoptosis_eaten_counter"]
-    ])  # no internal state here
+    model.apoptosis_eaten_counter = int(
+        desired_state[state_var_indices["apoptosis_eaten_counter"]]
+    )  # no internal state here
 
     # epithelium: infected, dead, apoptosed, healthy
     desired_epithelium = np.array(
@@ -520,8 +520,8 @@ def modify_model(
     if desired_total_epithelium > model.GRID_WIDTH * model.GRID_HEIGHT:
         # try a proportional rescale
         np.rint(
-                desired_epithelium
-                * (model.GRID_WIDTH * model.GRID_HEIGHT / desired_total_epithelium), out=desired_epithelium
+            desired_epithelium * (model.GRID_WIDTH * model.GRID_HEIGHT / desired_total_epithelium),
+            out=desired_epithelium,
         )
         assert np.all(desired_epithelium >= 0)
         desired_total_epithelium = np.sum(desired_epithelium)
