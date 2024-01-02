@@ -22,23 +22,23 @@ PER_TASK=1
 
 # Calculate the starting and ending values for this task based
 # on the SLURM task and the number of runs per task.
-START_NUM=$(( $SLURM_ARRAY_TASK_ID * $PER_TASK ))
-END_NUM=$(( ($SLURM_ARRAY_TASK_ID + 1) * $PER_TASK ))
+START_NUM=$(( SLURM_ARRAY_TASK_ID * PER_TASK ))
+END_NUM=$(( (SLURM_ARRAY_TASK_ID + 1) * PER_TASK ))
 
 # Print the task and run range
-echo This is task $SLURM_ARRAY_TASK_ID, which will do runs $START_NUM to $(( $END_NUM - 1 ))
+echo "This is task $SLURM_ARRAY_TASK_ID, which will do runs $START_NUM to $(( END_NUM - 1 ))"
 
 module load python3
-cd /home/adam.knapp/blue_rlaubenbacher/adam.knapp/data-assimilation/kalman/an-cockrell-abm
+cd /home/adam.knapp/blue_rlaubenbacher/adam.knapp/data-assimilation/kalman/an-cockrell-abm || exit
 source venv/bin/activate
 
 
 # Run the loop of runs for this task.
-for (( run=$START_NUM; run < END_NUM; run++ )); do
-  echo This is SLURM task $SLURM_ARRAY_TASK_ID, run number $run
+for (( run=START_NUM; run < END_NUM; run++ )); do
+  echo "This is SLURM task $SLURM_ARRAY_TASK_ID, run number $run"
   #Do your stuff here
 
-  python3 an-cockrell-runner-sensitivity-individiual-params.py $run
+  python3 an-cockrell-runner-sensitivity-individiual-params.py "$run"
 
 done
 
