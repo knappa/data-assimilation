@@ -1,12 +1,14 @@
 import argparse
 import csv
 import sys
+import warnings
 from typing import Dict
 
 import an_cockrell
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy
+import sklearn.covariance as covariance
 from an_cockrell import AnCockrellModel, EndoType, EpiType
 from scipy.stats import multivariate_normal
 from tqdm.auto import tqdm
@@ -168,6 +170,7 @@ state_vars = [
     # "system_health",
     "dc_count",
     "nk_count",
+    "nk_count",
     "pmn_count",
     "macro_count",
 ]
@@ -288,8 +291,8 @@ assert all(param in default_params for param in variational_params)
 
 TIME_SPAN = 2016
 SAMPLE_INTERVAL = 48  # how often to make measurements
-ENSEMBLE_SIZE = 50
 UNIFIED_STATE_SPACE_DIMENSION = len(state_vars) + len(variational_params)
+ENSEMBLE_SIZE = max(50, (UNIFIED_STATE_SPACE_DIMENSION + 1))
 OBSERVABLES = ["extracellular_virus"] if not hasattr(args, "measurements") else args.measurements
 OBSERVABLE_VAR_NAMES = ["total_" + name for name in OBSERVABLES]
 
@@ -484,25 +487,35 @@ def modify_model(
     desired_total_extracellular_virus = desired_state[
         state_var_indices["total_extracellular_virus"]
     ]
-    model.extracellular_virus *= desired_total_extracellular_virus / model.total_extracellular_virus
+    if model.total_extracellular_virus > 0:
+        model.extracellular_virus *= (
+            desired_total_extracellular_virus / model.total_extracellular_virus
+        )
+    else:
+        model.infect(int(np.rint(desired_total_extracellular_virus)))
 
     desired_total_intracellular_virus = desired_state[
         state_var_indices["total_intracellular_virus"]
     ]
     # TODO: how close does this get? do we have to deal with discretization error?
-    np.rint(
-        model.epi_intracellular_virus[:]
-        * (desired_total_intracellular_virus / model.total_intracellular_virus),
-        out=model.epi_intracellular_virus,
-    )
+    if model.total_intracellular_virus > 0:
+        model.epi_intracellular_virus[:] = np.rint(
+            model.epi_intracellular_virus[:]
+            * (desired_total_intracellular_virus / model.total_intracellular_virus),
+        ).astype(int)
+    # if the update clears out all virus in an infected cell, it should be healthy
+    model.epithelium[
+        np.where((model.epithelium == EpiType.Infected) & (model.epi_intracellular_virus <= 0))
+    ] = EpiType.Healthy
 
     model.apoptosis_eaten_counter = int(
-        desired_state[state_var_indices["apoptosis_eaten_counter"]]
+        np.rint(desired_state[state_var_indices["apoptosis_eaten_counter"]])
     )  # no internal state here
 
     # epithelium: infected, dead, apoptosed, healthy
-    desired_epithelium = np.array(
-        np.round(
+    desired_epithelium = np.maximum(
+        0,
+        np.rint(
             desired_state[
                 [
                     state_var_indices["infected_epithelium_count"],
@@ -511,22 +524,22 @@ def modify_model(
                     state_var_indices["healthy_epithelium_count"],
                 ]
             ]
-        ),
-        dtype=np.int64,
+        ).astype(int),
     )
     desired_total_epithelium = np.sum(desired_epithelium)
     # Since these just samples from a normal distribution, the sampling might request more epithelium than
     # there is room for. We try to do our best...
     if desired_total_epithelium > model.GRID_WIDTH * model.GRID_HEIGHT:
         # try a proportional rescale
-        np.rint(
-            desired_epithelium * (model.GRID_WIDTH * model.GRID_HEIGHT / desired_total_epithelium),
-            out=desired_epithelium,
+        desired_epithelium = np.maximum(
+            0,
+            np.rint(
+                desired_epithelium
+                * (model.GRID_WIDTH * model.GRID_HEIGHT / desired_total_epithelium),
+            ).astype(int),
         )
-        assert np.all(desired_epithelium >= 0)
         desired_total_epithelium = np.sum(desired_epithelium)
         # if that didn't go all the way (b/c e.g. rounding) knock off random individuals until it's ok
-        assert model.GRID_WIDTH * model.GRID_HEIGHT > 0
         while desired_total_epithelium > model.GRID_WIDTH * model.GRID_HEIGHT:
             rand_idx = np.random.randint(4)
             if desired_epithelium[rand_idx] > 0:
@@ -537,47 +550,44 @@ def modify_model(
     # first, kill off (empty) any excess in the epithelial categories
     if model.infected_epithelium_count > desired_epithelium[0]:
         infected_locations = np.array(np.where(model.epithelium == EpiType.Infected))
-        empty_locs = np.random.choice(
+        locs_to_empty = np.random.choice(
             infected_locations.shape[1],
             model.infected_epithelium_count - desired_epithelium[0],
             replace=False,
         )
-        for loc in empty_locs:
-            model.epithelium[infected_locations[:, loc]] = EpiType.Empty
-            model.epi_intracellular_virus[infected_locations[:, loc]] = 0
+        model.epithelium[tuple(locs_to_empty)] = EpiType.Empty
+        model.epi_intracellular_virus[tuple(locs_to_empty)] = 0
+        # TODO: move the recalc of epi_intracellular_virus after this?
 
     if model.dead_epithelium_count > desired_epithelium[1]:
         dead_locations = np.array(np.where(model.epithelium == EpiType.Dead))
-        empty_locs = np.random.choice(
+        locs_to_empty = np.random.choice(
             dead_locations.shape[1],
             model.dead_epithelium_count - desired_epithelium[1],
             replace=False,
         )
-        for loc in empty_locs:
-            model.epithelium[dead_locations[:, loc]] = EpiType.Empty
-            model.epi_intracellular_virus[dead_locations[:, loc]] = 0
+        model.epithelium[tuple(locs_to_empty)] = EpiType.Empty
+        model.epi_intracellular_virus[tuple(locs_to_empty)] = 0
 
     if model.apoptosed_epithelium_count > desired_epithelium[2]:
         apoptosed_locations = np.array(np.where(model.epithelium == EpiType.Apoptosed))
-        empty_locs = np.random.choice(
+        locs_to_empty = np.random.choice(
             apoptosed_locations.shape[1],
             model.apoptosed_epithelium_count - desired_epithelium[2],
             replace=False,
         )
-        for loc in empty_locs:
-            model.epithelium[apoptosed_locations[:, loc]] = EpiType.Empty
-            model.epi_intracellular_virus[apoptosed_locations[:, loc]] = 0
+        model.epithelium[tuple(locs_to_empty)] = EpiType.Empty
+        model.epi_intracellular_virus[tuple(locs_to_empty)] = 0
 
     if model.healthy_epithelium_count > desired_epithelium[3]:
-        healthy_locations = np.array(np.where(model.epithelium == EpiType.Healthy))
-        empty_locs = np.random.choice(
-            healthy_locations.shape[1],
+        healthy_locations = np.where(model.epithelium == EpiType.Healthy)
+        locs_to_empty = np.random.choice(
+            len(healthy_locations[0]),
             model.healthy_epithelium_count - desired_epithelium[3],
             replace=False,
         )
-        for loc in empty_locs:
-            model.epithelium[healthy_locations[:, loc]] = EpiType.Empty
-            model.epi_intracellular_virus[healthy_locations[:, loc]] = 0
+        model.epithelium[healthy_locations[0][locs_to_empty],healthy_locations[1][locs_to_empty]] = EpiType.Empty
+        model.epi_intracellular_virus[healthy_locations[0][locs_to_empty],healthy_locations[1][locs_to_empty]] = 0
 
     # second, spawn to make up for deficiency in the epithelial categories
     # TODO: check the following epithelium state variables
@@ -586,48 +596,48 @@ def modify_model(
     #  epithelium_apoptosis_counter
     if model.infected_epithelium_count < desired_epithelium[0]:
         empty_locations = np.array(np.where(model.epithelium == EpiType.Empty))
-        infected_locs = np.random.choice(
+        assert len(empty_locations) > 0
+        locs_to_infect = np.random.choice(
             empty_locations.shape[1],
             desired_epithelium[0] - model.infected_epithelium_count,
             replace=False,
         )
-        for loc in infected_locs:
-            model.epithelium[empty_locations[:, loc]] = EpiType.Infected
-            # virus_invade_epi_cell says also: self.epi_intracellular_virus[invasion_mask] += 1
-            model.epi_intracellular_virus[empty_locations[:, loc]] += 1
+        model.epithelium[tuple(locs_to_infect)] = EpiType.Infected
+        model.epi_intracellular_virus[tuple(locs_to_infect)] = 1
+        # TODO: move the recalc of epi_intracellular_virus after this?
 
     if model.dead_epithelium_count < desired_epithelium[1]:
         empty_locations = np.array(np.where(model.epithelium == EpiType.Empty))
-        dead_locs = np.random.choice(
+        assert len(empty_locations) > 0
+        locs_to_make_dead = np.random.choice(
             empty_locations.shape[1],
             desired_epithelium[1] - model.dead_epithelium_count,
             replace=False,
         )
-        for loc in dead_locs:
-            model.epithelium[empty_locations[:, loc]] = EpiType.Dead
-            model.epi_intracellular_virus[empty_locations[:, loc]] = 0
+        model.epithelium[tuple(locs_to_make_dead)] = EpiType.Dead
+        model.epi_intracellular_virus[tuple(locs_to_make_dead)] = 0
 
     if model.apoptosed_epithelium_count < desired_epithelium[2]:
         empty_locations = np.array(np.where(model.epithelium == EpiType.Empty))
+        assert len(empty_locations) > 0
         apoptosed_locs = np.random.choice(
             empty_locations.shape[1],
             desired_epithelium[2] - model.apoptosed_epithelium_count,
             replace=False,
         )
-        for loc in apoptosed_locs:
-            model.epithelium[empty_locations[:, loc]] = EpiType.Apoptosed
-            model.epi_intracellular_virus[empty_locations[:, loc]] = 0
+        model.epithelium[tuple(apoptosed_locs)] = EpiType.Apoptosed
+        model.epi_intracellular_virus[tuple(apoptosed_locs)] = 0
 
     if model.healthy_epithelium_count < desired_epithelium[3]:
         empty_locations = np.array(np.where(model.epithelium == EpiType.Empty))
+        assert len(empty_locations) > 0
         healthy_locs = np.random.choice(
             empty_locations.shape[1],
             desired_epithelium[3] - model.healthy_epithelium_count,
             replace=False,
         )
-        for loc in healthy_locs:
-            model.epithelium[empty_locations[:, loc]] = EpiType.Healthy
-            model.epi_intracellular_virus[empty_locations[:, loc]] = 0
+        model.epithelium[tuple(healthy_locs)] = EpiType.Healthy
+        model.epi_intracellular_virus[tuple(healthy_locs)] = 0
 
     dc_delta = desired_state[state_var_indices["dc_count"]] - model.dc_count
     if dc_delta > 0:
@@ -720,16 +730,24 @@ cov_matrix = np.full(
 # collect initial statistics
 time = 0
 initial_macro_data = np.array([model_macro_data(model) for model in model_ensemble])
-mean_vec[time, :] = np.mean(initial_macro_data, axis=0)
-cov_matrix[time, :, :] = np.cov(initial_macro_data, rowvar=False)
+# mean_vec[time, :] = np.mean(initial_macro_data, axis=0)
+# cov_matrix[time, :, :] = np.cov(initial_macro_data, rowvar=False)
+with warnings.catch_warnings(action="ignore", category=UserWarning):
+    cov_obj = covariance.LedoitWolf().fit(initial_macro_data)
+    # noinspection PyUnresolvedReferences
+    mean_vec[time, :] = cov_obj.location_
+    # noinspection PyUnresolvedReferences
+    cov_matrix[time, :, :], _ = covariance.graphical_lasso(cov_obj.covariance_, 1.0)
+    # # noinspection PyUnresolvedReferences
+    # cov_matrix[time,:,:] = cov_obj.covariance_
 
 cycle = 0
 while time < TIME_SPAN:
     cycle += 1
     print(f" *** {cycle=} *** ")
     # advance ensemble of models
-    for _ in range(SAMPLE_INTERVAL):
-        for model in model_ensemble:
+    for _ in tqdm(range(SAMPLE_INTERVAL), desc="time step"):
+        for model in tqdm(model_ensemble, desc="model"):
             model.time_step()
             if PARAMETER_RANDOM_WALK:
                 macrostate = model_macro_data(model)
@@ -743,8 +761,16 @@ while time < TIME_SPAN:
                 modify_model(model, random_walk_macrostate, ignore_state_vars=True)
         time += 1
         macro_data = np.array([model_macro_data(model) for model in model_ensemble])
-        mean_vec[time, :] = np.mean(macro_data, axis=0)
-        cov_matrix[time, :, :] = np.cov(macro_data, rowvar=False)
+        # mean_vec[time, :] = np.mean(macro_data, axis=0)
+        # cov_matrix[time, :, :] = np.cov(macro_data, rowvar=False)
+        with warnings.catch_warnings(action="ignore", category=UserWarning):
+            cov_obj = covariance.LedoitWolf().fit(macro_data)
+            # noinspection PyUnresolvedReferences
+            mean_vec[time, :] = cov_obj.location_
+            # noinspection PyUnresolvedReferences
+            cov_matrix[time, :, :], _ = covariance.graphical_lasso(cov_obj.covariance_, 1.0)
+            # # noinspection PyUnresolvedReferences
+            # cov_matrix[time,:,:] = cov_obj.covariance_
 
     ################################################################################
     # plot state variables
@@ -979,118 +1005,118 @@ while time < TIME_SPAN:
             for model in model_ensemble:
                 state = dist.rvs()
                 modify_model(model, state)
-
-################################################################################
-
-vp_full_trajectory = np.array(
-    (
-        vp_wolf_counts,
-        vp_sheep_counts,
-        vp_grass_counts,
-        [vp_wolf_gain_from_food] * (TIME_SPAN + 1),
-        [vp_sheep_gain_from_food] * (TIME_SPAN + 1),
-        [vp_wolf_reproduce] * (TIME_SPAN + 1),
-        [vp_sheep_reproduce] * (TIME_SPAN + 1),
-        [vp_grass_regrowth_time] * (TIME_SPAN + 1),
-    )
-).T
-
-delta_full = mean_vec - vp_full_trajectory
-surprisal_full = np.einsum("ij,ij->i", delta_full, np.linalg.solve(cov_matrix, delta_full))
-mean_surprisal_full = np.mean(surprisal_full)
-
-vp_state_trajectory = np.array(
-    (
-        vp_wolf_counts,
-        vp_sheep_counts,
-        vp_grass_counts,
-    )
-).T
-delta_state = mean_vec[:, :3] - vp_state_trajectory
-surprisal_state = np.einsum(
-    "ij,ij->i", delta_state, np.linalg.solve(cov_matrix[:, :3, :3], delta_state)
-)
-mean_surprisal_state = np.mean(surprisal_state)
-
-vp_param_trajectory = np.array(
-    (
-        [vp_wolf_gain_from_food] * (TIME_SPAN + 1),
-        [vp_sheep_gain_from_food] * (TIME_SPAN + 1),
-        [vp_wolf_reproduce] * (TIME_SPAN + 1),
-        [vp_sheep_reproduce] * (TIME_SPAN + 1),
-        [vp_grass_regrowth_time] * (TIME_SPAN + 1),
-    )
-).T
-delta_param = mean_vec[:, 3:] - vp_param_trajectory
-surprisal_param = np.einsum(
-    "ij,ij->i", delta_param, np.linalg.solve(cov_matrix[:, 3:, 3:], delta_param)
-)
-mean_surprisal_param = np.mean(surprisal_param)
-
-if GRAPHS:
-    plt.plot(surprisal_full, label="full surprisal")
-    plt.plot(surprisal_state, label="state surprisal")
-    plt.plot(surprisal_param, label="param surprisal")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(FILE_PREFIX + f"surprisal.pdf")
-    plt.close()
-
-if GRAPHS:
-    fig, axs = plt.subplots(4, figsize=(6, 8))
-    plural = {"wolf": "wolves", "sheep": "sheep", "grass": "grass"}
-    vp_data = {
-        "wolf": vp_wolf_counts,
-        "sheep": vp_sheep_counts,
-        "grass": vp_grass_counts,
-    }
-    max_scales = {
-        "wolf": 10 * mean_init_wolves,
-        "sheep": 10 * mean_init_sheep,
-        "grass": 10 * mean_init_grass_proportion * GRID_HEIGHT * GRID_WIDTH,
-    }
-    for idx, state_var_name in enumerate(["wolf", "sheep", "grass"]):
-        axs[idx].plot(
-            vp_data[state_var_name],
-            label="true value",
-            color="black",
-        )
-        axs[idx].plot(
-            range(TIME_SPAN + 1),
-            mean_vec[:, idx],
-            label="estimate",
-        )
-        axs[idx].fill_between(
-            range(TIME_SPAN + 1),
-            np.maximum(
-                0.0,
-                mean_vec[:, idx] - np.sqrt(cov_matrix[:, idx, idx]),
-            ),
-            np.minimum(
-                max_scales[state_var_name],
-                mean_vec[:, idx] + np.sqrt(cov_matrix[:, idx, idx]),
-            ),
-            color="gray",
-            alpha=0.35,
-        )
-        axs[idx].set_title(state_var_name)
-        axs[idx].legend()
-    axs[3].set_title("surprisal")
-    axs[3].plot(surprisal_state, label="state surprisal")
-    axs[3].plot(
-        [0, TIME_SPAN + 1], [mean_surprisal_state, mean_surprisal_state], ":", color="black"
-    )
-    fig.tight_layout()
-    fig.savefig(FILE_PREFIX + f"match.pdf")
-    plt.close(fig)
-
-np.savez_compressed(
-    FILE_PREFIX + f"data.npz",
-    vp_full_trajectory=vp_full_trajectory,
-    mean_vec=mean_vec,
-    cov_matrix=cov_matrix,
-)
-with open(FILE_PREFIX + "meansurprisal.csv", "w") as file:
-    csvwriter = csv.writer(file, delimiter=",", quoting=csv.QUOTE_MINIMAL)
-    csvwriter.writerow(["full", "state", "param"])
-    csvwriter.writerow([mean_surprisal_full, mean_surprisal_state, mean_surprisal_param])
+#
+# ################################################################################
+#
+# vp_full_trajectory = np.array(
+#     (
+#         vp_wolf_counts,
+#         vp_sheep_counts,
+#         vp_grass_counts,
+#         [vp_wolf_gain_from_food] * (TIME_SPAN + 1),
+#         [vp_sheep_gain_from_food] * (TIME_SPAN + 1),
+#         [vp_wolf_reproduce] * (TIME_SPAN + 1),
+#         [vp_sheep_reproduce] * (TIME_SPAN + 1),
+#         [vp_grass_regrowth_time] * (TIME_SPAN + 1),
+#     )
+# ).T
+#
+# delta_full = mean_vec - vp_full_trajectory
+# surprisal_full = np.einsum("ij,ij->i", delta_full, np.linalg.solve(cov_matrix, delta_full))
+# mean_surprisal_full = np.mean(surprisal_full)
+#
+# vp_state_trajectory = np.array(
+#     (
+#         vp_wolf_counts,
+#         vp_sheep_counts,
+#         vp_grass_counts,
+#     )
+# ).T
+# delta_state = mean_vec[:, :3] - vp_state_trajectory
+# surprisal_state = np.einsum(
+#     "ij,ij->i", delta_state, np.linalg.solve(cov_matrix[:, :3, :3], delta_state)
+# )
+# mean_surprisal_state = np.mean(surprisal_state)
+#
+# vp_param_trajectory = np.array(
+#     (
+#         [vp_wolf_gain_from_food] * (TIME_SPAN + 1),
+#         [vp_sheep_gain_from_food] * (TIME_SPAN + 1),
+#         [vp_wolf_reproduce] * (TIME_SPAN + 1),
+#         [vp_sheep_reproduce] * (TIME_SPAN + 1),
+#         [vp_grass_regrowth_time] * (TIME_SPAN + 1),
+#     )
+# ).T
+# delta_param = mean_vec[:, 3:] - vp_param_trajectory
+# surprisal_param = np.einsum(
+#     "ij,ij->i", delta_param, np.linalg.solve(cov_matrix[:, 3:, 3:], delta_param)
+# )
+# mean_surprisal_param = np.mean(surprisal_param)
+#
+# if GRAPHS:
+#     plt.plot(surprisal_full, label="full surprisal")
+#     plt.plot(surprisal_state, label="state surprisal")
+#     plt.plot(surprisal_param, label="param surprisal")
+#     plt.legend()
+#     plt.tight_layout()
+#     plt.savefig(FILE_PREFIX + f"surprisal.pdf")
+#     plt.close()
+#
+# if GRAPHS:
+#     fig, axs = plt.subplots(4, figsize=(6, 8))
+#     plural = {"wolf": "wolves", "sheep": "sheep", "grass": "grass"}
+#     vp_data = {
+#         "wolf": vp_wolf_counts,
+#         "sheep": vp_sheep_counts,
+#         "grass": vp_grass_counts,
+#     }
+#     max_scales = {
+#         "wolf": 10 * mean_init_wolves,
+#         "sheep": 10 * mean_init_sheep,
+#         "grass": 10 * mean_init_grass_proportion * GRID_HEIGHT * GRID_WIDTH,
+#     }
+#     for idx, state_var_name in enumerate(["wolf", "sheep", "grass"]):
+#         axs[idx].plot(
+#             vp_data[state_var_name],
+#             label="true value",
+#             color="black",
+#         )
+#         axs[idx].plot(
+#             range(TIME_SPAN + 1),
+#             mean_vec[:, idx],
+#             label="estimate",
+#         )
+#         axs[idx].fill_between(
+#             range(TIME_SPAN + 1),
+#             np.maximum(
+#                 0.0,
+#                 mean_vec[:, idx] - np.sqrt(cov_matrix[:, idx, idx]),
+#             ),
+#             np.minimum(
+#                 max_scales[state_var_name],
+#                 mean_vec[:, idx] + np.sqrt(cov_matrix[:, idx, idx]),
+#             ),
+#             color="gray",
+#             alpha=0.35,
+#         )
+#         axs[idx].set_title(state_var_name)
+#         axs[idx].legend()
+#     axs[3].set_title("surprisal")
+#     axs[3].plot(surprisal_state, label="state surprisal")
+#     axs[3].plot(
+#         [0, TIME_SPAN + 1], [mean_surprisal_state, mean_surprisal_state], ":", color="black"
+#     )
+#     fig.tight_layout()
+#     fig.savefig(FILE_PREFIX + f"match.pdf")
+#     plt.close(fig)
+#
+# np.savez_compressed(
+#     FILE_PREFIX + f"data.npz",
+#     vp_full_trajectory=vp_full_trajectory,
+#     mean_vec=mean_vec,
+#     cov_matrix=cov_matrix,
+# )
+# with open(FILE_PREFIX + "meansurprisal.csv", "w") as file:
+#     csvwriter = csv.writer(file, delimiter=",", quoting=csv.QUOTE_MINIMAL)
+#     csvwriter.writerow(["full", "state", "param"])
+#     csvwriter.writerow([mean_surprisal_full, mean_surprisal_state, mean_surprisal_param])
