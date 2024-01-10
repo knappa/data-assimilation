@@ -1,5 +1,4 @@
 import argparse
-import csv
 import sys
 import warnings
 from typing import Dict
@@ -170,7 +169,6 @@ state_vars = [
     # "system_health",
     "dc_count",
     "nk_count",
-    "nk_count",
     "pmn_count",
     "macro_count",
 ]
@@ -181,7 +179,7 @@ state_var_indices = {s: i for i, s in enumerate(state_vars)}
 # Attempts to be mostly square, with possibly more rows than columns
 state_var_graphs_cols: int = int(np.floor(np.sqrt(len(state_vars))))
 state_var_graphs_rows: int = int(np.ceil(len(state_vars) / state_var_graphs_cols))
-state_var_graphs_figsize = (1.6 * state_var_graphs_rows, 1.6 * state_var_graphs_cols)
+state_var_graphs_figsize = (1.8 * state_var_graphs_rows, 1.8 * state_var_graphs_cols)
 
 # parameters of the model used only for initialization
 init_only_params = [
@@ -280,11 +278,11 @@ variational_params_indices = {s: i + len(state_vars) for i, s in enumerate(state
 
 # layout for graphing parameters.
 # Attempts to be mostly square, with possibly more rows than columns
-variational_params_graphs_cols: int = int(np.floor(np.sqrt(len(state_vars))))
-variational_params_graphs_rows: int = int(np.ceil(len(state_vars) / state_var_graphs_cols))
+variational_params_graphs_cols: int = int(np.floor(np.sqrt(len(variational_params))))
+variational_params_graphs_rows: int = int(np.ceil(len(variational_params) / variational_params_graphs_cols))
 variational_params_graphs_figsize = (
-    1.6 * variational_params_graphs_rows,
-    1.6 * variational_params_graphs_cols,
+    1.8 * variational_params_graphs_rows,
+    1.8 * variational_params_graphs_cols,
 )
 
 assert all(param in default_params for param in variational_params)
@@ -292,7 +290,7 @@ assert all(param in default_params for param in variational_params)
 TIME_SPAN = 2016
 SAMPLE_INTERVAL = 48  # how often to make measurements
 UNIFIED_STATE_SPACE_DIMENSION = len(state_vars) + len(variational_params)
-ENSEMBLE_SIZE = max(50, (UNIFIED_STATE_SPACE_DIMENSION + 1))
+ENSEMBLE_SIZE = (UNIFIED_STATE_SPACE_DIMENSION + 1)*UNIFIED_STATE_SPACE_DIMENSION//2 #max(50, (UNIFIED_STATE_SPACE_DIMENSION + 1))
 OBSERVABLES = ["extracellular_virus"] if not hasattr(args, "measurements") else args.measurements
 OBSERVABLE_VAR_NAMES = ["total_" + name for name in OBSERVABLES]
 
@@ -308,7 +306,7 @@ PARAMETER_RANDOM_WALK = True
 
 FILE_PREFIX = "" if not hasattr(args, "prefix") else args.prefix + "-"
 
-GRAPHS = False if not hasattr(args, "graphs") else bool(args.graphs)
+GRAPHS = True if not hasattr(args, "graphs") else bool(args.graphs)
 
 ################################################################################
 # statistical parameters
@@ -457,32 +455,43 @@ def modify_model(
     # these reset-by-scaling fields may not go to quite the right thing on the next
     # time step. I'm not seeing an easy fix/alternative here, so ¯\_(ツ)_/¯ ?
 
-    desired_t1ifn = desired_state[state_var_indices["total_T1IFN"]]
-    model.T1IFN *= desired_t1ifn / model.total_T1IFN
+    # another problem is what to do when you have zero totals, punting here as well
 
-    desired_tnf = desired_state[state_var_indices["total_TNF"]]
-    model.TNF *= desired_tnf / model.total_TNF
+    if model.total_T1IFN > 0:
+        desired_t1ifn = desired_state[state_var_indices["total_T1IFN"]]
+        model.T1IFN *= desired_t1ifn / model.total_T1IFN
 
-    desired_ifn_g = desired_state[state_var_indices["total_IFNg"]]
-    model.IFNg *= desired_ifn_g / model.total_IFNg
+    if model.total_TNF > 0:
+        desired_tnf = desired_state[state_var_indices["total_TNF"]]
+        model.TNF *= desired_tnf / model.total_TNF
 
-    desired_il6 = desired_state[state_var_indices["total_IL6"]]
-    model.IL6 *= desired_il6 / model.total_IL6
+    if model.total_IFNg > 0:
+        desired_ifn_g = desired_state[state_var_indices["total_IFNg"]]
+        model.IFNg *= desired_ifn_g / model.total_IFNg
 
-    desired_il1 = desired_state[state_var_indices["total_IL1"]]
-    model.IL1 *= desired_il1 / model.total_IL1
+    if model.total_IL6 > 0:
+        desired_il6 = desired_state[state_var_indices["total_IL6"]]
+        model.IL6 *= desired_il6 / model.total_IL6
 
-    desired_il8 = desired_state[state_var_indices["total_IL8"]]
-    model.IL8 *= desired_il8 / model.total_IL8
+    if model.total_IL1 > 0:
+        desired_il1 = desired_state[state_var_indices["total_IL1"]]
+        model.IL1 *= desired_il1 / model.total_IL1
 
-    desired_il10 = desired_state[state_var_indices["total_IL10"]]
-    model.IL10 *= desired_il10 / model.total_IL10
+    if model.total_IL8 > 0:
+        desired_il8 = desired_state[state_var_indices["total_IL8"]]
+        model.IL8 *= desired_il8 / model.total_IL8
 
-    desired_il12 = desired_state[state_var_indices["total_IL12"]]
-    model.IL12 *= desired_il12 / model.total_IL12
+    if model.total_IL10 > 0:
+        desired_il10 = desired_state[state_var_indices["total_IL10"]]
+        model.IL10 *= desired_il10 / model.total_IL10
 
-    desired_il18 = desired_state[state_var_indices["total_IL18"]]
-    model.IL18 *= desired_il18 / model.total_IL18
+    if model.total_IL12 > 0:
+        desired_il12 = desired_state[state_var_indices["total_IL12"]]
+        model.IL12 *= desired_il12 / model.total_IL12
+
+    if model.total_IL18 > 0:
+        desired_il18 = desired_state[state_var_indices["total_IL18"]]
+        model.IL18 *= desired_il18 / model.total_IL18
 
     desired_total_extracellular_virus = desired_state[
         state_var_indices["total_extracellular_virus"]
@@ -549,35 +558,47 @@ def modify_model(
 
     # first, kill off (empty) any excess in the epithelial categories
     if model.infected_epithelium_count > desired_epithelium[0]:
-        infected_locations = np.array(np.where(model.epithelium == EpiType.Infected))
+        infected_locations = np.where(model.epithelium == EpiType.Infected)
         locs_to_empty = np.random.choice(
-            infected_locations.shape[1],
+            len(infected_locations[0]),
             model.infected_epithelium_count - desired_epithelium[0],
             replace=False,
         )
-        model.epithelium[tuple(locs_to_empty)] = EpiType.Empty
-        model.epi_intracellular_virus[tuple(locs_to_empty)] = 0
+        model.epithelium[
+            infected_locations[0][locs_to_empty], infected_locations[1][locs_to_empty]
+        ] = EpiType.Empty
+        model.epi_intracellular_virus[
+            infected_locations[0][locs_to_empty], infected_locations[1][locs_to_empty]
+        ] = 0
         # TODO: move the recalc of epi_intracellular_virus after this?
 
     if model.dead_epithelium_count > desired_epithelium[1]:
-        dead_locations = np.array(np.where(model.epithelium == EpiType.Dead))
+        dead_locations = np.where(model.epithelium == EpiType.Dead)
         locs_to_empty = np.random.choice(
-            dead_locations.shape[1],
+            len(dead_locations[0]),
             model.dead_epithelium_count - desired_epithelium[1],
             replace=False,
         )
-        model.epithelium[tuple(locs_to_empty)] = EpiType.Empty
-        model.epi_intracellular_virus[tuple(locs_to_empty)] = 0
+        model.epithelium[
+            dead_locations[0][locs_to_empty], dead_locations[1][locs_to_empty]
+        ] = EpiType.Empty
+        model.epi_intracellular_virus[
+            dead_locations[0][locs_to_empty], dead_locations[1][locs_to_empty]
+        ] = 0
 
     if model.apoptosed_epithelium_count > desired_epithelium[2]:
-        apoptosed_locations = np.array(np.where(model.epithelium == EpiType.Apoptosed))
+        apoptosed_locations = np.where(model.epithelium == EpiType.Apoptosed)
         locs_to_empty = np.random.choice(
-            apoptosed_locations.shape[1],
+            len(apoptosed_locations[0]),
             model.apoptosed_epithelium_count - desired_epithelium[2],
             replace=False,
         )
-        model.epithelium[tuple(locs_to_empty)] = EpiType.Empty
-        model.epi_intracellular_virus[tuple(locs_to_empty)] = 0
+        model.epithelium[
+            apoptosed_locations[0][locs_to_empty], apoptosed_locations[1][locs_to_empty]
+        ] = EpiType.Empty
+        model.epi_intracellular_virus[
+            apoptosed_locations[0][locs_to_empty], apoptosed_locations[1][locs_to_empty]
+        ] = 0
 
     if model.healthy_epithelium_count > desired_epithelium[3]:
         healthy_locations = np.where(model.epithelium == EpiType.Healthy)
@@ -586,8 +607,12 @@ def modify_model(
             model.healthy_epithelium_count - desired_epithelium[3],
             replace=False,
         )
-        model.epithelium[healthy_locations[0][locs_to_empty],healthy_locations[1][locs_to_empty]] = EpiType.Empty
-        model.epi_intracellular_virus[healthy_locations[0][locs_to_empty],healthy_locations[1][locs_to_empty]] = 0
+        model.epithelium[
+            healthy_locations[0][locs_to_empty], healthy_locations[1][locs_to_empty]
+        ] = EpiType.Empty
+        model.epi_intracellular_virus[
+            healthy_locations[0][locs_to_empty], healthy_locations[1][locs_to_empty]
+        ] = 0
 
     # second, spawn to make up for deficiency in the epithelial categories
     # TODO: check the following epithelium state variables
@@ -595,70 +620,91 @@ def modify_model(
     #  epi_intracellular_virus, epi_cell_membrane, epi_apoptosis_threshold,
     #  epithelium_apoptosis_counter
     if model.infected_epithelium_count < desired_epithelium[0]:
-        empty_locations = np.array(np.where(model.epithelium == EpiType.Empty))
-        assert len(empty_locations) > 0
+        empty_locations = np.where(model.epithelium == EpiType.Empty)
         locs_to_infect = np.random.choice(
-            empty_locations.shape[1],
+            len(empty_locations[1]),
             desired_epithelium[0] - model.infected_epithelium_count,
             replace=False,
         )
-        model.epithelium[tuple(locs_to_infect)] = EpiType.Infected
-        model.epi_intracellular_virus[tuple(locs_to_infect)] = 1
+        model.epithelium[
+            empty_locations[0][locs_to_infect], empty_locations[1][locs_to_infect]
+        ] = EpiType.Infected
+        model.epi_intracellular_virus[
+            empty_locations[0][locs_to_infect], empty_locations[1][locs_to_infect]
+        ] = 1
         # TODO: move the recalc of epi_intracellular_virus after this?
 
     if model.dead_epithelium_count < desired_epithelium[1]:
-        empty_locations = np.array(np.where(model.epithelium == EpiType.Empty))
+        empty_locations = np.where(model.epithelium == EpiType.Empty)
         assert len(empty_locations) > 0
         locs_to_make_dead = np.random.choice(
-            empty_locations.shape[1],
+            len(empty_locations[1]),
             desired_epithelium[1] - model.dead_epithelium_count,
             replace=False,
         )
-        model.epithelium[tuple(locs_to_make_dead)] = EpiType.Dead
-        model.epi_intracellular_virus[tuple(locs_to_make_dead)] = 0
+        model.epithelium[
+            empty_locations[0][locs_to_make_dead], empty_locations[1][locs_to_make_dead]
+        ] = EpiType.Dead
+        model.epi_intracellular_virus[
+            empty_locations[0][locs_to_make_dead], empty_locations[1][locs_to_make_dead]
+        ] = 0
 
     if model.apoptosed_epithelium_count < desired_epithelium[2]:
-        empty_locations = np.array(np.where(model.epithelium == EpiType.Empty))
+        empty_locations = np.where(model.epithelium == EpiType.Empty)
         assert len(empty_locations) > 0
         apoptosed_locs = np.random.choice(
-            empty_locations.shape[1],
+            len(empty_locations[1]),
             desired_epithelium[2] - model.apoptosed_epithelium_count,
             replace=False,
         )
-        model.epithelium[tuple(apoptosed_locs)] = EpiType.Apoptosed
-        model.epi_intracellular_virus[tuple(apoptosed_locs)] = 0
+        model.epithelium[
+            empty_locations[0][apoptosed_locs], empty_locations[1][apoptosed_locs]
+        ] = EpiType.Apoptosed
+        model.epi_intracellular_virus[
+            empty_locations[0][apoptosed_locs], empty_locations[1][apoptosed_locs]
+        ] = 0
 
     if model.healthy_epithelium_count < desired_epithelium[3]:
-        empty_locations = np.array(np.where(model.epithelium == EpiType.Empty))
+        empty_locations = np.where(model.epithelium == EpiType.Empty)
         assert len(empty_locations) > 0
         healthy_locs = np.random.choice(
-            empty_locations.shape[1],
+            len(empty_locations[1]),
             desired_epithelium[3] - model.healthy_epithelium_count,
             replace=False,
         )
-        model.epithelium[tuple(healthy_locs)] = EpiType.Healthy
-        model.epi_intracellular_virus[tuple(healthy_locs)] = 0
+        model.epithelium[
+            empty_locations[0][healthy_locs], empty_locations[1][healthy_locs]
+        ] = EpiType.Healthy
+        model.epi_intracellular_virus[
+            empty_locations[0][healthy_locs], empty_locations[1][healthy_locs]
+        ] = 0
 
-    dc_delta = desired_state[state_var_indices["dc_count"]] - model.dc_count
+    dc_delta = int(np.rint(desired_state[state_var_indices["dc_count"]] - model.dc_count))
     if dc_delta > 0:
         for _ in range(dc_delta):
             model.create_dc()
     elif dc_delta < 0:
         # need fewer dcs, kill them randomly
-        dcs_to_kill = np.random.choice(model.num_dcs, min(-dc_delta, model.num_dcs), replace=False)
+        num_to_kill = min(-dc_delta, model.num_dcs)
+        dcs_to_kill = np.random.choice(model.num_dcs, num_to_kill, replace=False)
         dc_idcs = np.where(model.dc_mask)[0]
         model.dc_mask[dc_idcs[dcs_to_kill]] = False
+        model.num_dcs -= num_to_kill
+        assert model.num_dcs == np.sum(model.dc_mask)
 
-    nk_delta = desired_state[state_var_indices["nk_count"]] - model.nk_count
+    nk_delta = int(np.rint(desired_state[state_var_indices["nk_count"]] - model.nk_count))
     if nk_delta > 0:
         model.create_nk(number=int(nk_delta))
     elif nk_delta < 0:
         # need fewer nks, kill them randomly
-        nks_to_kill = np.random.choice(model.num_nks, min(-nk_delta, model.num_nks), replace=False)
+        num_to_kill = min(-nk_delta, model.num_nks)
+        nks_to_kill = np.random.choice(model.num_nks, num_to_kill, replace=False)
         nk_idcs = np.where(model.nk_mask)[0]
         model.nk_mask[nk_idcs[nks_to_kill]] = False
+        model.num_nks -= num_to_kill
+        assert model.num_nks == np.sum(model.nk_mask)
 
-    pmn_delta = desired_state[state_var_indices["pmn_count"]] - model.pmn_count
+    pmn_delta = int(np.rint(desired_state[state_var_indices["pmn_count"]] - model.pmn_count))
     if pmn_delta > 0:
         # need more pmns
         # adapted from activated_endo_update
@@ -683,13 +729,14 @@ def modify_model(
                 print("Nowhere to put desired pmns")
     elif pmn_delta < 0:
         # need fewer pmns, kill them randomly
-        pmns_to_kill = np.random.choice(
-            model.num_pmns, min(-pmn_delta, model.num_pmns), replace=False
-        )
+        num_to_kill = min(-pmn_delta, model.num_pmns)
+        pmns_to_kill = np.random.choice(model.num_pmns, num_to_kill, replace=False)
         pmn_idcs = np.where(model.pmn_mask)[0]
         model.pmn_mask[pmn_idcs[pmns_to_kill]] = False
+        model.num_pmns -= num_to_kill
+        assert model.num_pmns == np.sum(model.pmn_mask)
 
-    macro_delta = desired_state[state_var_indices["macro_count"]] - model.macro_count
+    macro_delta = int(np.rint(desired_state[state_var_indices["macro_count"]] - model.macro_count))
     if macro_delta > 0:
         # need more macrophages, create them as in init in random locations
         for _ in range(macro_delta):
@@ -705,11 +752,14 @@ def modify_model(
             )
     elif macro_delta < 0:
         # need fewer macrophages, kill them randomly
+        num_to_kill = min(-macro_delta, model.num_macros)
         macros_to_kill = np.random.choice(
-            model.num_macros, min(-macro_delta, model.num_macros), replace=False
+            model.num_macros, num_to_kill, replace=False
         )
         macro_idcs = np.where(model.macro_mask)[0]
         model.macro_mask[macro_idcs[macros_to_kill]] = False
+        model.num_macros -= num_to_kill
+        assert model.num_macros == np.sum(model.macro_mask)
 
 
 ################################################################################
@@ -730,16 +780,16 @@ cov_matrix = np.full(
 # collect initial statistics
 time = 0
 initial_macro_data = np.array([model_macro_data(model) for model in model_ensemble])
-# mean_vec[time, :] = np.mean(initial_macro_data, axis=0)
-# cov_matrix[time, :, :] = np.cov(initial_macro_data, rowvar=False)
-with warnings.catch_warnings(action="ignore", category=UserWarning):
-    cov_obj = covariance.LedoitWolf().fit(initial_macro_data)
-    # noinspection PyUnresolvedReferences
-    mean_vec[time, :] = cov_obj.location_
-    # noinspection PyUnresolvedReferences
-    cov_matrix[time, :, :], _ = covariance.graphical_lasso(cov_obj.covariance_, 1.0)
-    # # noinspection PyUnresolvedReferences
-    # cov_matrix[time,:,:] = cov_obj.covariance_
+mean_vec[time, :] = np.mean(initial_macro_data, axis=0)
+cov_matrix[time, :, :] = np.cov(initial_macro_data, rowvar=False)
+# with warnings.catch_warnings(action="ignore", category=UserWarning):
+#     cov_obj = covariance.LedoitWolf().fit(initial_macro_data)
+#     # noinspection PyUnresolvedReferences
+#     mean_vec[time, :] = cov_obj.location_
+#     # noinspection PyUnresolvedReferences
+#     cov_matrix[time, :, :], _ = covariance.graphical_lasso(cov_obj.covariance_, 1.0)
+#     # # noinspection PyUnresolvedReferences
+#     # cov_matrix[time,:,:] = cov_obj.covariance_
 
 cycle = 0
 while time < TIME_SPAN:
@@ -747,7 +797,7 @@ while time < TIME_SPAN:
     print(f" *** {cycle=} *** ")
     # advance ensemble of models
     for _ in tqdm(range(SAMPLE_INTERVAL), desc="time step"):
-        for model in tqdm(model_ensemble, desc="model"):
+        for model in model_ensemble:
             model.time_step()
             if PARAMETER_RANDOM_WALK:
                 macrostate = model_macro_data(model)
@@ -761,16 +811,16 @@ while time < TIME_SPAN:
                 modify_model(model, random_walk_macrostate, ignore_state_vars=True)
         time += 1
         macro_data = np.array([model_macro_data(model) for model in model_ensemble])
-        # mean_vec[time, :] = np.mean(macro_data, axis=0)
-        # cov_matrix[time, :, :] = np.cov(macro_data, rowvar=False)
-        with warnings.catch_warnings(action="ignore", category=UserWarning):
-            cov_obj = covariance.LedoitWolf().fit(macro_data)
-            # noinspection PyUnresolvedReferences
-            mean_vec[time, :] = cov_obj.location_
-            # noinspection PyUnresolvedReferences
-            cov_matrix[time, :, :], _ = covariance.graphical_lasso(cov_obj.covariance_, 1.0)
-            # # noinspection PyUnresolvedReferences
-            # cov_matrix[time,:,:] = cov_obj.covariance_
+        mean_vec[time, :] = np.mean(macro_data, axis=0)
+        cov_matrix[time, :, :] = np.cov(macro_data, rowvar=False)
+        # with warnings.catch_warnings(action="ignore", category=UserWarning):
+        #     cov_obj = covariance.LedoitWolf().fit(macro_data)
+        #     # noinspection PyUnresolvedReferences
+        #     mean_vec[time, :] = cov_obj.location_
+        #     # noinspection PyUnresolvedReferences
+        #     cov_matrix[time, :, :], _ = covariance.graphical_lasso(cov_obj.covariance_, 1.0)
+        #     # # noinspection PyUnresolvedReferences
+        #     # cov_matrix[time,:,:] = cov_obj.covariance_
 
     ################################################################################
     # plot state variables
@@ -808,7 +858,16 @@ while time < TIME_SPAN:
                 alpha=0.35,
             )
             axs[row, col].set_title(state_var_name)
-            axs[row, col].legend()
+            ymax = max(
+                1.1*np.max(vp_trajectory[: (cycle + 1) * SAMPLE_INTERVAL + 1, idx]),
+                1.1*np.max(mean_vec[: cycle * SAMPLE_INTERVAL + 1, idx])
+            )
+            if ymax == 0:
+                ymax = 1.0
+            axs[row, col].set_ylim([0, ymax])
+            # axs[row, col].legend()
+        handles, labels = axs[0, 0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc='outside lower center')
         fig.tight_layout()
         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-match.pdf")
         plt.close(fig)
@@ -824,15 +883,16 @@ while time < TIME_SPAN:
             sharex=True,
             sharey=False,
         )
-        for idx, param_name in enumerate(state_vars):
+        for idx, param_name in enumerate(variational_params):
             row, col = idx // variational_params_graphs_cols, idx % variational_params_graphs_cols
 
-            axs[row, col].plot(
-                [0, (cycle + 1) * SAMPLE_INTERVAL + 1],
-                [vp_init_params[param_name]] * 2,
-                label="true value",
-                color="black",
-            )
+            if param_name in vp_init_params:
+                axs[row, col].plot(
+                    [0, (cycle + 1) * SAMPLE_INTERVAL + 1],
+                    [vp_init_params[param_name]] * 2,
+                    label="true value",
+                    color="black",
+                )
             axs[row, col].plot(
                 range(cycle * SAMPLE_INTERVAL + 1),
                 mean_vec[: cycle * SAMPLE_INTERVAL + 1, len(state_vars) + idx],
@@ -852,7 +912,7 @@ while time < TIME_SPAN:
                     ),
                 ),
                 np.minimum(
-                    10 * vp_init_params[param_name],
+                    10 * vp_init_params[param_name] if param_name in vp_init_params else float('inf'),
                     mean_vec[: cycle * SAMPLE_INTERVAL + 1, len(state_vars) + idx]
                     + np.sqrt(
                         cov_matrix[
@@ -866,8 +926,28 @@ while time < TIME_SPAN:
                 alpha=0.35,
             )
             axs[row, col].set_title(param_name)
-            axs[row, col].legend()
-        axs[2, 1].axis("off")
+            ymax = 1.1 * max(
+                np.max(vp_trajectory[: (cycle + 1) * SAMPLE_INTERVAL + 1, len(state_vars) + idx]),
+                np.max(mean_vec[: cycle * SAMPLE_INTERVAL + 1, len(state_vars) + idx])
+            )
+            # most_of_variation = np.percentile((mean_vec[: cycle * SAMPLE_INTERVAL + 1, len(state_vars) + idx]
+            # + np.sqrt(
+            #     cov_matrix[
+            #     : cycle * SAMPLE_INTERVAL + 1,
+            #     len(state_vars) + idx,
+            #     len(state_vars) + idx,
+            #     ]
+            # )),0.9)
+            if ymax == 0:
+                ymax = 1.0
+            axs[row, col].set_ylim([0, ymax])
+        # remove axes on unused graphs
+        for idx in range(len(variational_params), variational_params_graphs_rows*variational_params_graphs_cols):
+            row, col = idx // variational_params_graphs_cols, idx % variational_params_graphs_cols
+            axs[row, col].axis("off")
+
+        handles, labels = axs[0,0].get_legend_handles_labels()
+        fig.legend(handles,labels,loc='outside lower center')
         fig.tight_layout()
         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-match-params.pdf")
         plt.close(fig)
@@ -879,15 +959,15 @@ while time < TIME_SPAN:
 
     # rs encodes the uncertainty in the various observations
     rs: Dict[str, float] = {
-        "total_T1IFN": 1.0,
-        "total_TNF": 1.0,
-        "total_IFNg": 1.0,
-        "total_IL6": 1.0,
-        "total_IL1": 1.0,
-        "total_IL8": 1.0,
-        "total_IL10": 1.0,
-        "total_IL12": 1.0,
-        "total_IL18": 1.0,
+        # "total_T1IFN": 1.0,
+        # "total_TNF": 1.0,
+        # "total_IFNg": 1.0,
+        # "total_IL6": 1.0,
+        # "total_IL1": 1.0,
+        # "total_IL8": 1.0,
+        # "total_IL10": 1.0,
+        # "total_IL12": 1.0,
+        # "total_IL18": 1.0,
         "total_extracellular_virus": 1.0,
     }
     R = np.diag([rs[obs_name] for obs_name in OBSERVABLE_VAR_NAMES])
