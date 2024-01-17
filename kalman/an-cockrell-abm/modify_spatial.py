@@ -2,6 +2,113 @@ import numpy as np
 from an_cockrell import AnCockrellModel, EndoType, EpiType
 
 
+def floyd_steinberg_dither(
+    epithelium, healthy_count, infected_count, apoptosed_count, dead_count, empty_count
+):
+    state_vecs = np.zeros(shape=(*epithelium.shape, 5), dtype=np.float64)
+    state_vecs[:, :, 0] = epithelium == EpiType.Healthy
+    state_vecs[:, :, 1] = epithelium == EpiType.Infected
+    state_vecs[:, :, 2] = epithelium == EpiType.Apoptosed
+    state_vecs[:, :, 3] = epithelium == EpiType.Dead
+    state_vecs[:, :, 4] = epithelium == EpiType.Empty
+
+    prev_healthy_count = np.sum(state_vecs[:, :, 0])
+    prev_infected_count = np.sum(state_vecs[:, :, 1])
+    prev_apoptosed_count = np.sum(state_vecs[:, :, 2])
+    prev_dead_count = np.sum(state_vecs[:, :, 3])
+    prev_empty_count = np.sum(state_vecs[:, :, 4])
+
+    for idx, (new_count, prev_count) in enumerate(
+        zip(
+            [healthy_count, infected_count, apoptosed_count, dead_count, empty_count],
+            [
+                prev_healthy_count,
+                prev_infected_count,
+                prev_apoptosed_count,
+                prev_dead_count,
+                prev_empty_count,
+            ],
+        )
+    ):
+        if prev_count > 0:
+            state_vecs[:, :, idx] *= new_count / prev_count
+        elif new_count > 0:
+            # stick it somewhere, wherever the error builds up and other things are ambiguous
+            rand_field = np.random.rand(*state_vecs[:, :, idx].shape)
+            state_vecs[:, :, idx] = new_count * rand_field / np.sum(rand_field)
+
+    new_epithelium = np.zeros(shape=epithelium.shape, dtype=EpiType)
+
+    for double_row_idx in range(2 * epithelium.shape[0]):
+        for double_col_idx in range(2 * epithelium.shape[1]):
+            row_idx = double_row_idx % epithelium.shape[0]
+            col_idx = double_col_idx % epithelium.shape[1]
+
+            cell_type = np.argmax(state_vecs[row_idx, col_idx, :])
+            # TODO: consistency checks for these cell types (internal virus, etc)
+            if cell_type == 0:
+                new_epithelium[row_idx, col_idx] = EpiType.Healthy
+                error = state_vecs[row_idx, col_idx, :] - np.array((1, 0, 0, 0, 0))
+                state_vecs[row_idx, col_idx, :] = np.array((1, 0, 0, 0, 0))
+            elif cell_type == 1:
+                new_epithelium[row_idx, col_idx] = EpiType.Infected
+                error = state_vecs[row_idx, col_idx, :] - np.array((0, 1, 0, 0, 0))
+                state_vecs[row_idx, col_idx, :] = np.array((0, 1, 0, 0, 0))
+            elif cell_type == 2:
+                new_epithelium[row_idx, col_idx] = EpiType.Apoptosed
+                error = state_vecs[row_idx, col_idx, :] - np.array((0, 0, 1, 0, 0))
+                state_vecs[row_idx, col_idx, :] = np.array((0, 0, 1, 0, 0))
+            elif cell_type == 3:
+                new_epithelium[row_idx, col_idx] = EpiType.Dead
+                error = state_vecs[row_idx, col_idx, :] - np.array((0, 0, 0, 1, 0))
+                state_vecs[row_idx, col_idx, :] = np.array((0, 0, 0, 1, 0))
+            elif cell_type == 4:
+                new_epithelium[row_idx, col_idx] = EpiType.Empty
+                error = state_vecs[row_idx, col_idx, :] - np.array((0, 0, 0, 0, 1))
+                state_vecs[row_idx, col_idx, :] = np.array((0, 0, 0, 0, 1))
+            else:
+                assert False
+
+            state_vecs[row_idx, (col_idx + 1) % state_vecs.shape[1], :] += (
+                error * 7 / 16
+            )
+            state_vecs[
+                (row_idx + 1) % state_vecs.shape[0],
+                (col_idx - 1) % state_vecs.shape[1],
+                :,
+            ] += (
+                error * 3 / 16
+            )
+            state_vecs[(row_idx + 1) % state_vecs.shape[0], col_idx, :] += (
+                error * 5 / 16
+            )
+            state_vecs[
+                (row_idx + 1) % state_vecs.shape[0],
+                (col_idx + 1) % state_vecs.shape[1],
+                :,
+            ] += (
+                error / 16
+            )
+
+    return new_epithelium
+
+
+from an_cockrell import AnCockrellModel, EndoType, EpiType
+
+from modify_spatial import floyd_steinberg_dither
+
+epithelium = np.full((50, 50), EpiType.Healthy, dtype=EpiType)
+X, Y = np.meshgrid(np.arange(50), np.arange(50))
+epithelium[np.sqrt((X - 25) ** 2 + (Y - 25) ** 2) < 10] = EpiType.Infected
+epithelium[np.sqrt((X - 25) ** 2 + (Y - 50) ** 2) < 10] = EpiType.Empty
+empty_count, healthy_count, infected_count, dead_count, apoptosed_count = [
+    np.sum(epithelium.astype(int) == tp) for tp in range(5)
+]
+new_epithelium = floyd_steinberg_dither(
+    epithelium, healthy_count, infected_count, apoptosed_count, dead_count, empty_count
+)
+
+
 def modify_model(
     model: AnCockrellModel,
     desired_state: np.ndarray,

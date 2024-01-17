@@ -10,7 +10,7 @@ from an_cockrell import AnCockrellModel
 from scipy.stats import multivariate_normal
 from tqdm.auto import tqdm
 
-from modify_simple import modify_model
+
 
 ################################################################################
 
@@ -53,9 +53,20 @@ else:
 
     parser.add_argument("--graphs", help="make pdf graphs", action="store_true")
 
+    parser.add_argument("--update-algorithm", type=str, choices=["simple", "spatial"], required=True)
+
     args = parser.parse_args()
 
 VERBOSE = False
+
+modification_algorithm = (
+    "spatial" if not hasattr(args, "update-algorithm") else args.update_algorithm
+)
+
+if modification_algorithm == "spatial":
+    from modify_spatial import modify_model
+else:
+    from modify_simple import modify_model
 
 ################################################################################
 # constants
@@ -491,7 +502,7 @@ while time < TIME_SPAN:
                     model,
                     random_walk_macrostate,
                     ignore_state_vars=True,
-                    VERBOSE=VERBOSE,
+                    verbose=VERBOSE,
                     state_var_indices=state_var_indices,
                     state_vars=state_vars,
                     variational_params=variational_params,
@@ -801,7 +812,7 @@ while time < TIME_SPAN:
                 modify_model(
                     model_ensemble[model_idx],
                     new_sample[model_to_sample_pairing[model_idx], :],
-                    VERBOSE=VERBOSE,
+                    verbose=VERBOSE,
                     state_var_indices=state_var_indices,
                     state_vars=state_vars,
                     variational_params=variational_params,
@@ -813,7 +824,7 @@ while time < TIME_SPAN:
                 modify_model(
                     model,
                     state,
-                    VERBOSE=VERBOSE,
+                    verbose=VERBOSE,
                     state_var_indices=state_var_indices,
                     state_vars=state_vars,
                     variational_params=variational_params,
