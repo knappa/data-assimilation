@@ -1,73 +1,126 @@
+from typing import Callable
+
+import h5py
 import numpy as np
-from an_cockrell import AnCockrellModel, EndoType, EpiType
+from an_cockrell import AnCockrellModel, EndoType, EpiType, epitype_one_hot_encoding
+
+
+def quantization_maker() -> Callable[[AnCockrellModel, int, int], EpiType]:
+    with h5py.File("local-nbhd-statistics.hdf5", "r") as h5file:
+        mean = h5file["mean"][:]
+        cov_mat = h5file["cov_mat"][:, :]
+        # num_samples = h5file['num_samples'][()]
+    cov_mat_inv = np.linalg.pinv(cov_mat)
+
+    def _quantizer(model: AnCockrellModel, row_idx: int, col_idx: int) -> EpiType:
+        spatial_vars = [
+            model.epithelium_ros_damage_counter,  # idx: 5
+            model.epi_regrow_counter,  # idx: 6
+            model.epi_apoptosis_counter,  # idx: 7
+            model.epi_intracellular_virus,  # idx: 8
+            model.epi_cell_membrane,  # idx: 9
+            model.endothelial_activation,  # idx: 10
+            model.endothelial_adhesion_counter,  # idx: 11
+            model.extracellular_virus,  # idx: 12
+            model.P_DAMPS,  # idx: 13
+            model.ROS,  # idx: 14
+            model.PAF,  # idx: 15
+            model.TNF,  # idx: 16
+            model.IL1,  # idx: 17
+            model.IL6,  # idx: 18
+            model.IL8,  # idx: 19
+            model.IL10,  # idx: 20
+            model.IL12,  # idx: 21
+            model.IL18,  # idx: 22
+            model.IFNg,  # idx: 23
+            model.T1IFN,  # idx: 24
+        ]
+        block_dim = 5 + len(spatial_vars)
+
+        # assemble the sample as a vector
+        sample = np.zeros(shape=(9 * block_dim,), dtype=np.float64)
+        for block_idx, (row_delta, col_delta) in enumerate(
+            (
+                (0, 0),
+                (-1, -1),
+                (-1, 0),
+                (-1, 1),
+                (0, -1),
+                # (0,0) put first
+                (0, 1),
+                (1, -1),
+                (1, 0),
+                (1, 1),
+            )
+        ):
+            block_row = (row_idx + row_delta) % model.geometry[0]
+            block_col = (col_idx + col_delta) % model.geometry[1]
+
+            sample[
+                block_idx * block_dim : 5 + block_idx * block_dim
+            ] = epitype_one_hot_encoding(model.epithelium[block_row, block_col])
+            for idx, spatial_var in enumerate(spatial_vars, 5):
+                sample[idx + block_idx * block_dim] = spatial_var[block_row, block_col]
+
+        # evaluate the various quantizations
+        min_type = None
+        min_neg_log_likelihood = float("inf")
+        for epitype in EpiType:
+            # setup for quantized state
+            quantized_state = sample.copy()
+            quantized_state[: len(EpiType)] = epitype_one_hot_encoding(epitype)
+
+            # check if min neg_log_likelihood (= max probability)
+            quantized_neg_log_likelihood = (
+                (quantized_state - mean) @ cov_mat_inv @ (quantized_state - mean)
+            )
+            if quantized_neg_log_likelihood < min_neg_log_likelihood:
+                min_type = epitype
+                min_neg_log_likelihood = quantized_neg_log_likelihood
+
+        return min_type
+
+    return _quantizer
+
+
+quantizer = quantization_maker()
 
 
 def floyd_steinberg_dither(
-    epithelium, healthy_count, infected_count, apoptosed_count, dead_count, empty_count
+    model: AnCockrellModel,
+    new_epi_counts,
 ):
-    state_vecs = np.zeros(shape=(*epithelium.shape, 5), dtype=np.float64)
-    state_vecs[:, :, 0] = epithelium == EpiType.Healthy
-    state_vecs[:, :, 1] = epithelium == EpiType.Infected
-    state_vecs[:, :, 2] = epithelium == EpiType.Apoptosed
-    state_vecs[:, :, 3] = epithelium == EpiType.Dead
-    state_vecs[:, :, 4] = epithelium == EpiType.Empty
+    state_vecs = np.zeros(shape=(*model.geometry, 5), dtype=np.float64)
+    state_vecs[:, :, :5] = epitype_one_hot_encoding(model.epithelium)
 
-    prev_healthy_count = np.sum(state_vecs[:, :, 0])
-    prev_infected_count = np.sum(state_vecs[:, :, 1])
-    prev_apoptosed_count = np.sum(state_vecs[:, :, 2])
-    prev_dead_count = np.sum(state_vecs[:, :, 3])
-    prev_empty_count = np.sum(state_vecs[:, :, 4])
+    prev_epi_count = np.sum(state_vecs, axis=[0, 1])
 
-    for idx, (new_count, prev_count) in enumerate(
-        zip(
-            [healthy_count, infected_count, apoptosed_count, dead_count, empty_count],
-            [
-                prev_healthy_count,
-                prev_infected_count,
-                prev_apoptosed_count,
-                prev_dead_count,
-                prev_empty_count,
-            ],
-        )
-    ):
+    for idx, (new_count, prev_count) in enumerate(zip(new_epi_counts, prev_epi_count)):
         if prev_count > 0:
             state_vecs[:, :, idx] *= new_count / prev_count
         elif new_count > 0:
             # stick it somewhere, wherever the error builds up and other things are ambiguous
-            rand_field = np.random.rand(*state_vecs[:, :, idx].shape)
+            rand_field = np.random.rand(*model.geometry)
             state_vecs[:, :, idx] = new_count * rand_field / np.sum(rand_field)
 
-    new_epithelium = np.zeros(shape=epithelium.shape, dtype=EpiType)
+    new_epithelium = np.zeros(shape=model.geometry, dtype=EpiType)
 
-    for double_row_idx in range(2 * epithelium.shape[0]):
-        for double_col_idx in range(2 * epithelium.shape[1]):
-            row_idx = double_row_idx % epithelium.shape[0]
-            col_idx = double_col_idx % epithelium.shape[1]
+    for double_row_idx in range(2 * model.geometry[0]):
+        for double_col_idx in range(2 * model.geometry[1]):
+            row_idx = double_row_idx % model.geometry[0]
+            col_idx = double_col_idx % model.geometry[1]
 
-            cell_type = np.argmax(state_vecs[row_idx, col_idx, :])
+            # cell_type = np.argmax(state_vecs[row_idx, col_idx, :])
+            cell_type = quantizer(model, row_idx, col_idx)
+
             # TODO: consistency checks for these cell types (internal virus, etc)
-            if cell_type == 0:
-                new_epithelium[row_idx, col_idx] = EpiType.Healthy
-                error = state_vecs[row_idx, col_idx, :] - np.array((1, 0, 0, 0, 0))
-                state_vecs[row_idx, col_idx, :] = np.array((1, 0, 0, 0, 0))
-            elif cell_type == 1:
-                new_epithelium[row_idx, col_idx] = EpiType.Infected
-                error = state_vecs[row_idx, col_idx, :] - np.array((0, 1, 0, 0, 0))
-                state_vecs[row_idx, col_idx, :] = np.array((0, 1, 0, 0, 0))
-            elif cell_type == 2:
-                new_epithelium[row_idx, col_idx] = EpiType.Apoptosed
-                error = state_vecs[row_idx, col_idx, :] - np.array((0, 0, 1, 0, 0))
-                state_vecs[row_idx, col_idx, :] = np.array((0, 0, 1, 0, 0))
-            elif cell_type == 3:
-                new_epithelium[row_idx, col_idx] = EpiType.Dead
-                error = state_vecs[row_idx, col_idx, :] - np.array((0, 0, 0, 1, 0))
-                state_vecs[row_idx, col_idx, :] = np.array((0, 0, 0, 1, 0))
-            elif cell_type == 4:
-                new_epithelium[row_idx, col_idx] = EpiType.Empty
-                error = state_vecs[row_idx, col_idx, :] - np.array((0, 0, 0, 0, 1))
-                state_vecs[row_idx, col_idx, :] = np.array((0, 0, 0, 0, 1))
-            else:
-                assert False
+            error = np.zeros(5, dtype=np.float64)
+            for epitype in EpiType:
+                if cell_type == epitype:
+                    new_epithelium[row_idx, col_idx] = epitype
+                    one_hot = epitype_one_hot_encoding(epitype)
+                    error = state_vecs[row_idx, col_idx, :] - one_hot
+                    state_vecs[row_idx, col_idx, :] = one_hot
 
             state_vecs[row_idx, (col_idx + 1) % state_vecs.shape[1], :] += (
                 error * 7 / 16
@@ -93,20 +146,18 @@ def floyd_steinberg_dither(
     return new_epithelium
 
 
-from an_cockrell import AnCockrellModel, EndoType, EpiType
-
-from modify_spatial import floyd_steinberg_dither
-
-epithelium = np.full((50, 50), EpiType.Healthy, dtype=EpiType)
-X, Y = np.meshgrid(np.arange(50), np.arange(50))
-epithelium[np.sqrt((X - 25) ** 2 + (Y - 25) ** 2) < 10] = EpiType.Infected
-epithelium[np.sqrt((X - 25) ** 2 + (Y - 50) ** 2) < 10] = EpiType.Empty
-empty_count, healthy_count, infected_count, dead_count, apoptosed_count = [
-    np.sum(epithelium.astype(int) == tp) for tp in range(5)
-]
-new_epithelium = floyd_steinberg_dither(
-    epithelium, healthy_count, infected_count, apoptosed_count, dead_count, empty_count
-)
+# from modify_spatial import floyd_steinberg_dither
+#
+# epithelium = np.full((50, 50), EpiType.Healthy, dtype=EpiType)
+# X, Y = np.meshgrid(np.arange(50), np.arange(50))
+# epithelium[np.sqrt((X - 25) ** 2 + (Y - 25) ** 2) < 10] = EpiType.Infected
+# epithelium[np.sqrt((X - 25) ** 2 + (Y - 50) ** 2) < 10] = EpiType.Empty
+# empty_count, healthy_count, infected_count, dead_count, apoptosed_count = [
+#     np.sum(epithelium.astype(int) == tp) for tp in range(5)
+# ]
+# new_epithelium = floyd_steinberg_dither(
+#     epithelium, healthy_count, infected_count, apoptosed_count, dead_count, empty_count
+# )
 
 
 def modify_model(
