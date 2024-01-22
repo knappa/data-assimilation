@@ -64,7 +64,7 @@ modification_algorithm = (
 )
 
 if modification_algorithm == "spatial":
-    from modify_spatial import modify_model
+    from modify_epi_spatial import modify_model
 else:
     from modify_simple import modify_model
 
