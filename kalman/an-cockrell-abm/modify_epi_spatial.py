@@ -3,6 +3,77 @@ from typing import Callable
 import h5py
 import numpy as np
 from an_cockrell import AnCockrellModel, EndoType, EpiType, epitype_one_hot_encoding
+from perlin_noise import PerlinNoise
+
+################################################################################
+
+
+def smooth_random_field(geometry):
+    noise = PerlinNoise()
+    return np.abs(
+        np.array(
+            [
+                [noise((i / geometry[0], j / geometry[1])) for j in range(geometry[1])]
+                for i in range(geometry[0])
+            ]
+        )
+    )
+
+
+################################################################################
+
+
+def compute_desired_epi_counts(desired_state, model, state_var_indices):
+    desired_epithelium = np.maximum(
+        0,
+        np.rint(
+            desired_state[
+                [
+                    state_var_indices["healthy_epithelium_count"],
+                    state_var_indices["infected_epithelium_count"],
+                    state_var_indices["dead_epithelium_count"],
+                    state_var_indices["apoptosed_epithelium_count"],
+                ]
+            ]
+        ).astype(int),
+    )
+    desired_total_epithelium = np.sum(desired_epithelium)
+    # Since these just samples from a normal distribution, the sampling might request more epithelium than
+    # there is room for. We try to do our best...
+    if desired_total_epithelium > model.GRID_WIDTH * model.GRID_HEIGHT:
+        # try a proportional rescale
+        desired_epithelium = np.maximum(
+            0,
+            np.rint(
+                desired_epithelium
+                * (model.GRID_WIDTH * model.GRID_HEIGHT / desired_total_epithelium),
+            ).astype(int),
+        )
+        desired_total_epithelium = np.sum(desired_epithelium)
+        # if that didn't go all the way (b/c e.g. rounding) knock off random individuals until it's ok
+        while desired_total_epithelium > model.GRID_WIDTH * model.GRID_HEIGHT:
+            rand_idx = np.random.randint(4)
+            if desired_epithelium[rand_idx] > 0:
+                desired_epithelium[rand_idx] -= 1
+                desired_total_epithelium -= 1
+    # now we are certain that desired_epithelium holds attainable values
+    (
+        desired_healthy_epi_count,
+        desired_infected_epi_count,
+        desired_dead_epi_count,
+        desired_apoptosed_epi_count,
+    ) = desired_epithelium
+    desired_empty_epi_count = np.prod(model.geometry) - np.sum(desired_epithelium)
+    return (
+        desired_empty_epi_count,
+        desired_healthy_epi_count,
+        desired_infected_epi_count,
+        desired_dead_epi_count,
+        desired_apoptosed_epi_count,
+    )
+
+
+################################################################################
 
 
 def quantization_maker() -> Callable[[AnCockrellModel, int, int], EpiType]:
@@ -86,23 +157,30 @@ def quantization_maker() -> Callable[[AnCockrellModel, int, int], EpiType]:
 quantizer = quantization_maker()
 
 
+################################################################################
+
+
 def floyd_steinberg_dither(
     model: AnCockrellModel,
     new_epi_counts,
-):
+) -> np.ndarray:
+    # store spatial distribution of one-hot encoding for epithelial cell type
     state_vecs = np.zeros(shape=(*model.geometry, 5), dtype=np.float64)
     state_vecs[:, :, :5] = epitype_one_hot_encoding(model.epithelium)
 
+    # counts of epi cell types for the incoming model
     prev_epi_count = np.sum(state_vecs, axis=[0, 1])
 
+    # alter the state vec to be compatible with the macro state encoded by new_epi_counts
     for idx, (new_count, prev_count) in enumerate(zip(new_epi_counts, prev_epi_count)):
         if prev_count > 0:
             state_vecs[:, :, idx] *= new_count / prev_count
         elif new_count > 0:
             # stick it somewhere, wherever the error builds up and other things are ambiguous
-            rand_field = np.random.rand(*model.geometry)
+            rand_field = smooth_random_field(model.geometry)
             state_vecs[:, :, idx] = new_count * rand_field / np.sum(rand_field)
 
+    # categorical encoding for the new epithelial distribution
     new_epithelium = np.zeros(shape=model.geometry, dtype=EpiType)
 
     for double_row_idx in range(2 * model.geometry[0]):
@@ -111,16 +189,13 @@ def floyd_steinberg_dither(
             col_idx = double_col_idx % model.geometry[1]
 
             # cell_type = np.argmax(state_vecs[row_idx, col_idx, :])
-            cell_type = quantizer(model, row_idx, col_idx)
+            cell_type: EpiType = quantizer(model, row_idx, col_idx)
 
             # TODO: consistency checks for these cell types (internal virus, etc)
-            error = np.zeros(5, dtype=np.float64)
-            for epitype in EpiType:
-                if cell_type == epitype:
-                    new_epithelium[row_idx, col_idx] = epitype
-                    one_hot = epitype_one_hot_encoding(epitype)
-                    error = state_vecs[row_idx, col_idx, :] - one_hot
-                    state_vecs[row_idx, col_idx, :] = one_hot
+            new_epithelium[row_idx, col_idx] = cell_type
+            one_hot = epitype_one_hot_encoding(cell_type)
+            error = state_vecs[row_idx, col_idx, :] - one_hot
+            state_vecs[row_idx, col_idx, :] = one_hot
 
             state_vecs[row_idx, (col_idx + 1) % state_vecs.shape[1], :] += (
                 error * 7 / 16
@@ -201,41 +276,68 @@ def modify_model(
 
     # another problem is what to do when you have zero totals, punting here as well
 
+    desired_t1ifn = desired_state[state_var_indices["total_T1IFN"]]
     if model.total_T1IFN > 0:
-        desired_t1ifn = desired_state[state_var_indices["total_T1IFN"]]
         model.T1IFN *= desired_t1ifn / model.total_T1IFN
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.T1IFN[:] = random_field * desired_t1ifn / np.sum(random_field)
 
+    desired_tnf = desired_state[state_var_indices["total_TNF"]]
     if model.total_TNF > 0:
-        desired_tnf = desired_state[state_var_indices["total_TNF"]]
         model.TNF *= desired_tnf / model.total_TNF
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.TNF[:] = random_field * desired_tnf / np.sum(random_field)
 
+    desired_ifn_g = desired_state[state_var_indices["total_IFNg"]]
     if model.total_IFNg > 0:
-        desired_ifn_g = desired_state[state_var_indices["total_IFNg"]]
         model.IFNg *= desired_ifn_g / model.total_IFNg
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.IFNg[:] = random_field * desired_ifn_g / np.sum(random_field)
 
-    if model.total_IL6 > 0:
-        desired_il6 = desired_state[state_var_indices["total_IL6"]]
-        model.IL6 *= desired_il6 / model.total_IL6
-
+    desired_il1 = desired_state[state_var_indices["total_IL1"]]
     if model.total_IL1 > 0:
-        desired_il1 = desired_state[state_var_indices["total_IL1"]]
         model.IL1 *= desired_il1 / model.total_IL1
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.IL1[:] = random_field * desired_il1 / np.sum(random_field)
 
+    desired_il6 = desired_state[state_var_indices["total_IL6"]]
+    if model.total_IL6 > 0:
+        model.IL6 *= desired_il6 / model.total_IL6
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.IL6[:] = random_field * desired_il6 / np.sum(random_field)
+
+    desired_il8 = desired_state[state_var_indices["total_IL8"]]
     if model.total_IL8 > 0:
-        desired_il8 = desired_state[state_var_indices["total_IL8"]]
         model.IL8 *= desired_il8 / model.total_IL8
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.IL8[:] = random_field * desired_il8 / np.sum(random_field)
 
+    desired_il10 = desired_state[state_var_indices["total_IL10"]]
     if model.total_IL10 > 0:
-        desired_il10 = desired_state[state_var_indices["total_IL10"]]
         model.IL10 *= desired_il10 / model.total_IL10
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.IL10[:] = random_field * desired_il10 / np.sum(random_field)
 
+    desired_il12 = desired_state[state_var_indices["total_IL12"]]
     if model.total_IL12 > 0:
-        desired_il12 = desired_state[state_var_indices["total_IL12"]]
         model.IL12 *= desired_il12 / model.total_IL12
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.IL12[:] = random_field * desired_il12 / np.sum(random_field)
 
+    desired_il18 = desired_state[state_var_indices["total_IL18"]]
     if model.total_IL18 > 0:
-        desired_il18 = desired_state[state_var_indices["total_IL18"]]
         model.IL18 *= desired_il18 / model.total_IL18
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.IL18[:] = random_field * desired_il18 / np.sum(random_field)
 
     desired_total_extracellular_virus = desired_state[
         state_var_indices["total_extracellular_virus"]
@@ -247,6 +349,25 @@ def modify_model(
     else:
         model.infect(int(np.rint(desired_total_extracellular_virus)))
 
+    ################################################################################
+
+    model.epithelium[:] = floyd_steinberg_dither(
+        model, compute_desired_epi_counts(desired_state, model, state_var_indices)
+    )
+
+    # sanity check on updated epithelium TODO: other checks
+    for epitype in EpiType:
+        if epitype == EpiType.Infected:
+            model.epi_intracellular_virus[
+                model.epithelium == EpiType.Infected
+            ] = np.maximum(
+                1, model.epi_intracellular_virus[model.epithelium == EpiType.Infected]
+            )
+        else:
+            model.epi_intracellular_virus[model.epithelium == epitype] = 0
+
+    ################################################################################
+
     desired_total_intracellular_virus = desired_state[
         state_var_indices["total_intracellular_virus"]
     ]
@@ -256,175 +377,16 @@ def modify_model(
             model.epi_intracellular_virus[:]
             * (desired_total_intracellular_virus / model.total_intracellular_virus),
         ).astype(int)
-    # if the update clears out all virus in an infected cell, it should be healthy
-    model.epithelium[
-        np.where(
-            (model.epithelium == EpiType.Infected)
-            & (model.epi_intracellular_virus <= 0)
+        # ensure that there is at least one virus in each infected cell
+        model.epi_intracellular_virus[
+            model.epithelium == EpiType.Infected
+        ] = np.maximum(
+            1, model.epi_intracellular_virus[model.epithelium == EpiType.Infected]
         )
-    ] = EpiType.Healthy
 
     model.apoptosis_eaten_counter = int(
         np.rint(desired_state[state_var_indices["apoptosis_eaten_counter"]])
     )  # no internal state here
-
-    # epithelium: infected, dead, apoptosed, healthy
-    desired_epithelium = np.maximum(
-        0,
-        np.rint(
-            desired_state[
-                [
-                    state_var_indices["infected_epithelium_count"],
-                    state_var_indices["dead_epithelium_count"],
-                    state_var_indices["apoptosed_epithelium_count"],
-                    state_var_indices["healthy_epithelium_count"],
-                ]
-            ]
-        ).astype(int),
-    )
-    desired_total_epithelium = np.sum(desired_epithelium)
-    # Since these just samples from a normal distribution, the sampling might request more epithelium than
-    # there is room for. We try to do our best...
-    if desired_total_epithelium > model.GRID_WIDTH * model.GRID_HEIGHT:
-        # try a proportional rescale
-        desired_epithelium = np.maximum(
-            0,
-            np.rint(
-                desired_epithelium
-                * (model.GRID_WIDTH * model.GRID_HEIGHT / desired_total_epithelium),
-            ).astype(int),
-        )
-        desired_total_epithelium = np.sum(desired_epithelium)
-        # if that didn't go all the way (b/c e.g. rounding) knock off random individuals until it's ok
-        while desired_total_epithelium > model.GRID_WIDTH * model.GRID_HEIGHT:
-            rand_idx = np.random.randint(4)
-            if desired_epithelium[rand_idx] > 0:
-                desired_epithelium[rand_idx] -= 1
-                desired_total_epithelium -= 1
-    # now we are certain that desired_epithelium holds attainable values
-
-    # first, kill off (empty) any excess in the epithelial categories
-    if model.infected_epithelium_count > desired_epithelium[0]:
-        infected_locations = np.where(model.epithelium == EpiType.Infected)
-        locs_to_empty = np.random.choice(
-            len(infected_locations[0]),
-            model.infected_epithelium_count - desired_epithelium[0],
-            replace=False,
-        )
-        model.epithelium[
-            infected_locations[0][locs_to_empty], infected_locations[1][locs_to_empty]
-        ] = EpiType.Empty
-        model.epi_intracellular_virus[
-            infected_locations[0][locs_to_empty], infected_locations[1][locs_to_empty]
-        ] = 0
-        # TODO: move the recalc of epi_intracellular_virus after this?
-
-    if model.dead_epithelium_count > desired_epithelium[1]:
-        dead_locations = np.where(model.epithelium == EpiType.Dead)
-        locs_to_empty = np.random.choice(
-            len(dead_locations[0]),
-            model.dead_epithelium_count - desired_epithelium[1],
-            replace=False,
-        )
-        model.epithelium[
-            dead_locations[0][locs_to_empty], dead_locations[1][locs_to_empty]
-        ] = EpiType.Empty
-        model.epi_intracellular_virus[
-            dead_locations[0][locs_to_empty], dead_locations[1][locs_to_empty]
-        ] = 0
-
-    if model.apoptosed_epithelium_count > desired_epithelium[2]:
-        apoptosed_locations = np.where(model.epithelium == EpiType.Apoptosed)
-        locs_to_empty = np.random.choice(
-            len(apoptosed_locations[0]),
-            model.apoptosed_epithelium_count - desired_epithelium[2],
-            replace=False,
-        )
-        model.epithelium[
-            apoptosed_locations[0][locs_to_empty], apoptosed_locations[1][locs_to_empty]
-        ] = EpiType.Empty
-        model.epi_intracellular_virus[
-            apoptosed_locations[0][locs_to_empty], apoptosed_locations[1][locs_to_empty]
-        ] = 0
-
-    if model.healthy_epithelium_count > desired_epithelium[3]:
-        healthy_locations = np.where(model.epithelium == EpiType.Healthy)
-        locs_to_empty = np.random.choice(
-            len(healthy_locations[0]),
-            model.healthy_epithelium_count - desired_epithelium[3],
-            replace=False,
-        )
-        model.epithelium[
-            healthy_locations[0][locs_to_empty], healthy_locations[1][locs_to_empty]
-        ] = EpiType.Empty
-        model.epi_intracellular_virus[
-            healthy_locations[0][locs_to_empty], healthy_locations[1][locs_to_empty]
-        ] = 0
-
-    # second, spawn to make up for deficiency in the epithelial categories
-    # TODO: check the following epithelium state variables
-    #  epithelium_ros_damage_counter, epi_regrow_counter, epi_apoptosis_counter,
-    #  epi_intracellular_virus, epi_cell_membrane, epi_apoptosis_threshold,
-    #  epithelium_apoptosis_counter
-    if model.infected_epithelium_count < desired_epithelium[0]:
-        empty_locations = np.where(model.epithelium == EpiType.Empty)
-        locs_to_infect = np.random.choice(
-            len(empty_locations[1]),
-            desired_epithelium[0] - model.infected_epithelium_count,
-            replace=False,
-        )
-        model.epithelium[
-            empty_locations[0][locs_to_infect], empty_locations[1][locs_to_infect]
-        ] = EpiType.Infected
-        model.epi_intracellular_virus[
-            empty_locations[0][locs_to_infect], empty_locations[1][locs_to_infect]
-        ] = 1
-        # TODO: move the recalc of epi_intracellular_virus after this?
-
-    if model.dead_epithelium_count < desired_epithelium[1]:
-        empty_locations = np.where(model.epithelium == EpiType.Empty)
-        assert len(empty_locations) > 0
-        locs_to_make_dead = np.random.choice(
-            len(empty_locations[1]),
-            desired_epithelium[1] - model.dead_epithelium_count,
-            replace=False,
-        )
-        model.epithelium[
-            empty_locations[0][locs_to_make_dead], empty_locations[1][locs_to_make_dead]
-        ] = EpiType.Dead
-        model.epi_intracellular_virus[
-            empty_locations[0][locs_to_make_dead], empty_locations[1][locs_to_make_dead]
-        ] = 0
-
-    if model.apoptosed_epithelium_count < desired_epithelium[2]:
-        empty_locations = np.where(model.epithelium == EpiType.Empty)
-        assert len(empty_locations) > 0
-        apoptosed_locs = np.random.choice(
-            len(empty_locations[1]),
-            desired_epithelium[2] - model.apoptosed_epithelium_count,
-            replace=False,
-        )
-        model.epithelium[
-            empty_locations[0][apoptosed_locs], empty_locations[1][apoptosed_locs]
-        ] = EpiType.Apoptosed
-        model.epi_intracellular_virus[
-            empty_locations[0][apoptosed_locs], empty_locations[1][apoptosed_locs]
-        ] = 0
-
-    if model.healthy_epithelium_count < desired_epithelium[3]:
-        empty_locations = np.where(model.epithelium == EpiType.Empty)
-        assert len(empty_locations) > 0
-        healthy_locs = np.random.choice(
-            len(empty_locations[1]),
-            desired_epithelium[3] - model.healthy_epithelium_count,
-            replace=False,
-        )
-        model.epithelium[
-            empty_locations[0][healthy_locs], empty_locations[1][healthy_locs]
-        ] = EpiType.Healthy
-        model.epi_intracellular_virus[
-            empty_locations[0][healthy_locs], empty_locations[1][healthy_locs]
-        ] = 0
 
     dc_delta = int(
         np.rint(desired_state[state_var_indices["dc_count"]] - model.dc_count)
