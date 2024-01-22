@@ -1,5 +1,23 @@
 import numpy as np
 from an_cockrell import AnCockrellModel, EndoType, EpiType
+from perlin_noise import PerlinNoise
+
+################################################################################
+
+
+def smooth_random_field(geometry):
+    noise = PerlinNoise()
+    return np.abs(
+        np.array(
+            [
+                [noise((i / geometry[0], j / geometry[1])) for j in range(geometry[1])]
+                for i in range(geometry[0])
+            ]
+        )
+    )
+
+
+################################################################################
 
 
 def modify_model(
@@ -43,41 +61,68 @@ def modify_model(
 
     # another problem is what to do when you have zero totals, punting here as well
 
+    desired_t1ifn = desired_state[state_var_indices["total_T1IFN"]]
     if model.total_T1IFN > 0:
-        desired_t1ifn = desired_state[state_var_indices["total_T1IFN"]]
         model.T1IFN *= desired_t1ifn / model.total_T1IFN
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.T1IFN[:] = random_field * desired_t1ifn / np.sum(random_field)
 
+    desired_tnf = desired_state[state_var_indices["total_TNF"]]
     if model.total_TNF > 0:
-        desired_tnf = desired_state[state_var_indices["total_TNF"]]
         model.TNF *= desired_tnf / model.total_TNF
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.TNF[:] = random_field * desired_tnf / np.sum(random_field)
 
+    desired_ifn_g = desired_state[state_var_indices["total_IFNg"]]
     if model.total_IFNg > 0:
-        desired_ifn_g = desired_state[state_var_indices["total_IFNg"]]
         model.IFNg *= desired_ifn_g / model.total_IFNg
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.IFNg[:] = random_field * desired_ifn_g / np.sum(random_field)
 
-    if model.total_IL6 > 0:
-        desired_il6 = desired_state[state_var_indices["total_IL6"]]
-        model.IL6 *= desired_il6 / model.total_IL6
-
+    desired_il1 = desired_state[state_var_indices["total_IL1"]]
     if model.total_IL1 > 0:
-        desired_il1 = desired_state[state_var_indices["total_IL1"]]
         model.IL1 *= desired_il1 / model.total_IL1
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.IL1[:] = random_field * desired_il1 / np.sum(random_field)
 
+    desired_il6 = desired_state[state_var_indices["total_IL6"]]
+    if model.total_IL6 > 0:
+        model.IL6 *= desired_il6 / model.total_IL6
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.IL6[:] = random_field * desired_il6 / np.sum(random_field)
+
+    desired_il8 = desired_state[state_var_indices["total_IL8"]]
     if model.total_IL8 > 0:
-        desired_il8 = desired_state[state_var_indices["total_IL8"]]
         model.IL8 *= desired_il8 / model.total_IL8
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.IL8[:] = random_field * desired_il8 / np.sum(random_field)
 
+    desired_il10 = desired_state[state_var_indices["total_IL10"]]
     if model.total_IL10 > 0:
-        desired_il10 = desired_state[state_var_indices["total_IL10"]]
         model.IL10 *= desired_il10 / model.total_IL10
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.IL10[:] = random_field * desired_il10 / np.sum(random_field)
 
+    desired_il12 = desired_state[state_var_indices["total_IL12"]]
     if model.total_IL12 > 0:
-        desired_il12 = desired_state[state_var_indices["total_IL12"]]
         model.IL12 *= desired_il12 / model.total_IL12
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.IL12[:] = random_field * desired_il12 / np.sum(random_field)
 
+    desired_il18 = desired_state[state_var_indices["total_IL18"]]
     if model.total_IL18 > 0:
-        desired_il18 = desired_state[state_var_indices["total_IL18"]]
         model.IL18 *= desired_il18 / model.total_IL18
+    else:
+        random_field = smooth_random_field(model.geometry)
+        model.IL18[:] = random_field * desired_il18 / np.sum(random_field)
 
     desired_total_extracellular_virus = desired_state[
         state_var_indices["total_extracellular_virus"]
