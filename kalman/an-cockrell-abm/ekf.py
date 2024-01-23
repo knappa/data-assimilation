@@ -5,12 +5,19 @@ from typing import Dict
 import an_cockrell
 import matplotlib.pyplot as plt
 import numpy as np
-import scipy
 from an_cockrell import AnCockrellModel
 from scipy.stats import multivariate_normal
 from tqdm.auto import tqdm
 
-
+from consts import (
+    UNIFIED_STATE_SPACE_DIMENSION,
+    default_params,
+    init_only_params,
+    state_var_indices,
+    state_vars,
+    variational_params,
+)
+from util import cov_cleanup, model_macro_data
 
 ################################################################################
 
@@ -53,7 +60,9 @@ else:
 
     parser.add_argument("--graphs", help="make pdf graphs", action="store_true")
 
-    parser.add_argument("--update-algorithm", type=str, choices=["simple", "spatial"], required=True)
+    parser.add_argument(
+        "--update-algorithm", type=str, choices=["simple", "spatial"], required=True
+    )
 
     args = parser.parse_args()
 
@@ -71,221 +80,12 @@ else:
 ################################################################################
 # constants
 
-default_params = dict(
-    GRID_WIDTH=51,
-    GRID_HEIGHT=51,
-    is_bat=False,
-    init_inoculum=100,
-    init_dcs=50,
-    init_nks=25,
-    init_macros=50,
-    macro_phago_recovery=0.5,
-    macro_phago_limit=1_000,
-    inflammasome_activation_threshold=10,  # default 50 for bats
-    inflammasome_priming_threshold=1.0,  # default 5.0 for bats
-    viral_carrying_capacity=500,
-    susceptibility_to_infection=77,
-    human_endo_activation=5,
-    human_metabolic_byproduct=0.2,
-    resistance_to_infection=75,
-    viral_incubation_threshold=60,
-    epi_apoptosis_threshold_lower=450,
-    epi_apoptosis_threshold_range=100,
-    epi_apoptosis_threshold_lower_regrow=475,
-    epi_apoptosis_threshold_range_regrow=51,
-    epi_regrowth_counter_threshold=432,
-    epi_cell_membrane_init_lower=975,
-    epi_cell_membrane_init_range=51,
-    infected_epithelium_ros_damage_counter_threshold=10,
-    epithelium_ros_damage_counter_threshold=2,
-    epithelium_pdamps_secretion_on_death=10.0,
-    dead_epithelium_pdamps_burst_secretion=10.0,
-    dead_epithelium_pdamps_secretion=1.0,
-    epi_max_tnf_uptake=0.1,
-    epi_max_il1_uptake=0.1,
-    epi_t1ifn_secretion=0.75,
-    epi_t1ifn_secretion_prob=0.01,
-    epi_pdamps_secretion_prob=0.01,
-    infected_epi_t1ifn_secretion=1.0,
-    infected_epi_il18_secretion=0.11,
-    infected_epi_il6_secretion=0.10,
-    activated_endo_death_threshold=0.5,
-    activated_endo_adhesion_threshold=36.0,
-    activated_endo_pmn_spawn_prob=0.1,
-    activated_endo_pmn_spawn_dist=5.0,
-    extracellular_virus_init_amount_lower=80,
-    extracellular_virus_init_amount_range=40,
-    human_viral_lower_bound=0.0,
-    human_t1ifn_effect_scale=0.01,
-    pmn_max_age=36,
-    pmn_ros_secretion_on_death=10.0,
-    pmn_il1_secretion_on_death=1.0,
-    nk_ifng_secretion=1.0,
-    macro_max_virus_uptake=10.0,
-    macro_activation_threshold=5.0,
-    macro_antiactivation_threshold=5.0,
-    activated_macro_il8_secretion=1.0,
-    activated_macro_il12_secretion=0.5,
-    activated_macro_tnf_secretion=1.0,
-    activated_macro_il6_secretion=0.4,
-    activated_macro_il10_secretion=1.0,
-    antiactivated_macro_il10_secretion=0.5,
-    inflammasome_il1_secretion=1.0,
-    inflammasome_macro_pre_il1_secretion=5.0,
-    inflammasome_il18_secretion=1.0,
-    inflammasome_macro_pre_il18_secretion=0.5,
-    pyroptosis_macro_pdamps_secretion=10.0,
-    dc_t1ifn_activation_threshold=1.0,
-    dc_il12_secretion=0.5,
-    dc_ifng_secretion=0.5,
-    dc_il6_secretion=0.4,
-    dc_il6_max_uptake=0.1,
-    extracellular_virus_diffusion_const=0.05,
-    T1IFN_diffusion_const=0.1,
-    PAF_diffusion_const=0.1,
-    ROS_diffusion_const=0.1,
-    P_DAMPS_diffusion_const=0.1,
-    IFNg_diffusion_const=0.2,
-    TNF_diffusion_const=0.2,
-    IL6_diffusion_const=0.2,
-    IL1_diffusion_const=0.2,
-    IL10_diffusion_const=0.2,
-    IL12_diffusion_const=0.2,
-    IL18_diffusion_const=0.2,
-    IL8_diffusion_const=0.3,
-    extracellular_virus_cleanup_threshold=0.05,
-    cleanup_threshold=0.1,
-    evap_const_1=0.99,
-    evap_const_2=0.9,
-)
-
-# variables which reflect the macrostate of the model
-state_vars = [
-    "total_T1IFN",
-    "total_TNF",
-    "total_IFNg",
-    "total_IL6",
-    "total_IL1",
-    "total_IL8",
-    "total_IL10",
-    "total_IL12",
-    "total_IL18",
-    "total_extracellular_virus",
-    "total_intracellular_virus",
-    "apoptosis_eaten_counter",
-    "infected_epithelium_count",
-    "dead_epithelium_count",
-    "apoptosed_epithelium_count",
-    "healthy_epithelium_count",
-    # "system_health",
-    "dc_count",
-    "nk_count",
-    "pmn_count",
-    "macro_count",
-]
-
-state_var_indices = {s: i for i, s in enumerate(state_vars)}
 
 # layout for graphing state variables.
 # Attempts to be mostly square, with possibly more rows than columns
 state_var_graphs_cols: int = int(np.floor(np.sqrt(len(state_vars))))
 state_var_graphs_rows: int = int(np.ceil(len(state_vars) / state_var_graphs_cols))
 state_var_graphs_figsize = (1.8 * state_var_graphs_rows, 1.8 * state_var_graphs_cols)
-
-# parameters of the model used only for initialization
-init_only_params = [
-    "init_inoculum",
-    "init_dcs",
-    "init_nks",
-    "init_macros",
-]
-
-# true parameters of the model
-variational_params = [
-    "macro_phago_recovery",
-    "macro_phago_limit",
-    "inflammasome_activation_threshold",
-    "inflammasome_priming_threshold",
-    "viral_carrying_capacity",
-    "susceptibility_to_infection",
-    "human_endo_activation",
-    "human_metabolic_byproduct",
-    "resistance_to_infection",
-    "viral_incubation_threshold",
-    "epi_apoptosis_threshold_lower",
-    "epi_apoptosis_threshold_range",
-    "epi_apoptosis_threshold_lower_regrow",
-    "epi_apoptosis_threshold_range_regrow",
-    "epi_regrowth_counter_threshold",
-    "epi_cell_membrane_init_lower",
-    "epi_cell_membrane_init_range",
-    "infected_epithelium_ros_damage_counter_threshold",
-    "epithelium_ros_damage_counter_threshold",
-    "epithelium_pdamps_secretion_on_death",
-    "dead_epithelium_pdamps_burst_secretion",
-    "dead_epithelium_pdamps_secretion",
-    "epi_max_tnf_uptake",
-    "epi_max_il1_uptake",
-    "epi_t1ifn_secretion",
-    "epi_t1ifn_secretion_prob",
-    "epi_pdamps_secretion_prob",
-    "infected_epi_t1ifn_secretion",
-    "infected_epi_il18_secretion",
-    "infected_epi_il6_secretion",
-    "activated_endo_death_threshold",
-    "activated_endo_adhesion_threshold",
-    "activated_endo_pmn_spawn_prob",
-    "activated_endo_pmn_spawn_dist",
-    "extracellular_virus_init_amount_lower",
-    "extracellular_virus_init_amount_range",
-    "human_t1ifn_effect_scale",
-    "pmn_max_age",
-    "pmn_ros_secretion_on_death",
-    "pmn_il1_secretion_on_death",
-    "nk_ifng_secretion",
-    "macro_max_virus_uptake",
-    "macro_activation_threshold",
-    "macro_antiactivation_threshold",
-    "activated_macro_il8_secretion",
-    "activated_macro_il12_secretion",
-    "activated_macro_tnf_secretion",
-    "activated_macro_il6_secretion",
-    "activated_macro_il10_secretion",
-    "antiactivated_macro_il10_secretion",
-    "inflammasome_il1_secretion",
-    "inflammasome_macro_pre_il1_secretion",
-    "inflammasome_il18_secretion",
-    "inflammasome_macro_pre_il18_secretion",
-    "pyroptosis_macro_pdamps_secretion",
-    "dc_t1ifn_activation_threshold",
-    "dc_il12_secretion",
-    "dc_ifng_secretion",
-    "dc_il6_secretion",
-    "dc_il6_max_uptake",
-    # # ACK's Executive Judgement: These are physics-like parameters and won't vary between individuals.
-    # # They also include model-intrinsic things like a cleanup thresholds which don't precisely
-    # # correspond to read world objects.
-    # "human_viral_lower_bound", # 0.0
-    # "extracellular_virus_diffusion_const",
-    # "T1IFN_diffusion_const",
-    # "PAF_diffusion_const",
-    # "ROS_diffusion_const",
-    # "P_DAMPS_diffusion_const",
-    # "IFNg_diffusion_const",
-    # "TNF_diffusion_const",
-    # "IL6_diffusion_const",
-    # "IL1_diffusion_const",
-    # "IL10_diffusion_const",
-    # "IL12_diffusion_const",
-    # "IL18_diffusion_const",
-    # "IL8_diffusion_const",
-    # "extracellular_virus_cleanup_threshold",
-    # "cleanup_threshold",
-    # "evap_const_1",
-    # "evap_const_2",
-]
-
-variational_params_indices = {s: i + len(state_vars) for i, s in enumerate(state_vars)}
 
 # layout for graphing parameters.
 # Attempts to be mostly square, with possibly more rows than columns
@@ -302,7 +102,7 @@ assert all(param in default_params for param in variational_params)
 
 TIME_SPAN = 2016
 SAMPLE_INTERVAL = 48  # how often to make measurements
-UNIFIED_STATE_SPACE_DIMENSION = len(state_vars) + len(variational_params)
+
 ENSEMBLE_SIZE = (
     (UNIFIED_STATE_SPACE_DIMENSION + 1) * UNIFIED_STATE_SPACE_DIMENSION // 2
 )  # max(50, (UNIFIED_STATE_SPACE_DIMENSION + 1))
@@ -342,27 +142,6 @@ init_cov_matrix = np.diag(
         ]
     )
 )
-
-
-################################################################################
-
-
-def model_macro_data(model: AnCockrellModel):
-    """
-    Collect macroscale data from a model
-    :param model:
-    :return:
-    """
-    macroscale_data = np.zeros(UNIFIED_STATE_SPACE_DIMENSION, dtype=np.float64)
-
-    for idx, param in enumerate(state_vars):
-        macroscale_data[idx] = getattr(model, param)
-
-    for idx, param in enumerate(variational_params):
-        macroscale_data[len(state_vars) + idx] = getattr(model, param)
-
-    return macroscale_data
-
 
 ################################################################################
 # sample a virtual patient
@@ -699,39 +478,12 @@ while time < TIME_SPAN:
 
     v = observation - (H @ mean_vec[time, :])
     S = H @ cov_matrix[time, :, :] @ H.T + R
-    K = cov_matrix[time, :, :] @ H.T @ np.linalg.inv(S)
+    K = cov_matrix[time, :, :] @ H.T @ np.linalg.pinv(S)
 
     mean_vec[time, :] += K @ v
     cov_matrix[time, :, :] -= K @ S @ K.T
 
-    # numerical cleanup: symmetrize and project onto pos def cone
-    cov_matrix[time, :, :] = np.nan_to_num(
-        (
-            np.nan_to_num(cov_matrix[time, :, :])
-            + np.nan_to_num(cov_matrix[time, :, :].T)
-        )
-        / 2.0
-    )
-    eigenvalues, eigenvectors = scipy.linalg.eigh(
-        cov_matrix[time, :, :], lower=True, check_finite=False
-    )
-    eigenvalues[:] = np.real(eigenvalues)  # just making sure
-    eigenvectors[:, :] = np.real(eigenvectors)  # just making sure
-    # spectrum must be positive.
-    # from the scipy code, it also can't have a max/min e-val ratio bigger than 1/(1e6*double machine epsilon)
-    # and that's ~4503599627.370496=1/(1e6*np.finfo('d').eps), so a ratio bounded by 1e9 is ok.
-    cov_matrix[time, :, :] = (
-        eigenvectors
-        @ np.diag(np.minimum(1e5, np.maximum(1e-4, eigenvalues)))
-        @ eigenvectors.T
-    )
-    cov_matrix[time, :, :] = np.nan_to_num(
-        (
-            np.nan_to_num(cov_matrix[time, :, :])
-            + np.nan_to_num(cov_matrix[time, :, :].T)
-        )
-        / 2.0
-    )
+    cov_matrix[time, :, :] = cov_cleanup(cov_matrix[time, :, :])
 
     # recreate ensemble
     if RESAMPLE_MODELS:

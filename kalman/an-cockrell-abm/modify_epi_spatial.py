@@ -1,89 +1,25 @@
 from typing import Callable
 
 import h5py
+import matplotlib.pyplot as plt
 import numpy as np
 from an_cockrell import AnCockrellModel, EndoType, EpiType, epitype_one_hot_encoding
-from perlin_noise import PerlinNoise
+
+from util import compute_desired_epi_counts, smooth_random_field
 
 ################################################################################
 
 
-def smooth_random_field(geometry):
-    noise = PerlinNoise()
-    return np.abs(
-        np.array(
-            [
-                [noise((i / geometry[0], j / geometry[1])) for j in range(geometry[1])]
-                for i in range(geometry[0])
-            ]
-        )
-    )
-
-
-################################################################################
-
-
-def compute_desired_epi_counts(desired_state, model, state_var_indices):
-    desired_epithelium = np.maximum(
-        0,
-        np.rint(
-            desired_state[
-                [
-                    state_var_indices["healthy_epithelium_count"],
-                    state_var_indices["infected_epithelium_count"],
-                    state_var_indices["dead_epithelium_count"],
-                    state_var_indices["apoptosed_epithelium_count"],
-                ]
-            ]
-        ).astype(int),
-    )
-    desired_total_epithelium = np.sum(desired_epithelium)
-    # Since these just samples from a normal distribution, the sampling might request more epithelium than
-    # there is room for. We try to do our best...
-    if desired_total_epithelium > model.GRID_WIDTH * model.GRID_HEIGHT:
-        # try a proportional rescale
-        desired_epithelium = np.maximum(
-            0,
-            np.rint(
-                desired_epithelium
-                * (model.GRID_WIDTH * model.GRID_HEIGHT / desired_total_epithelium),
-            ).astype(int),
-        )
-        desired_total_epithelium = np.sum(desired_epithelium)
-        # if that didn't go all the way (b/c e.g. rounding) knock off random individuals until it's ok
-        while desired_total_epithelium > model.GRID_WIDTH * model.GRID_HEIGHT:
-            rand_idx = np.random.randint(4)
-            if desired_epithelium[rand_idx] > 0:
-                desired_epithelium[rand_idx] -= 1
-                desired_total_epithelium -= 1
-    # now we are certain that desired_epithelium holds attainable values
-    (
-        desired_healthy_epi_count,
-        desired_infected_epi_count,
-        desired_dead_epi_count,
-        desired_apoptosed_epi_count,
-    ) = desired_epithelium
-    desired_empty_epi_count = np.prod(model.geometry) - np.sum(desired_epithelium)
-    return (
-        desired_empty_epi_count,
-        desired_healthy_epi_count,
-        desired_infected_epi_count,
-        desired_dead_epi_count,
-        desired_apoptosed_epi_count,
-    )
-
-
-################################################################################
-
-
-def quantization_maker() -> Callable[[AnCockrellModel, int, int], EpiType]:
+def quantization_maker() -> Callable[[AnCockrellModel, np.ndarray, int, int], EpiType]:
     with h5py.File("local-nbhd-statistics.hdf5", "r") as h5file:
         mean = h5file["mean"][:]
         cov_mat = h5file["cov_mat"][:, :]
         # num_samples = h5file['num_samples'][()]
     cov_mat_inv = np.linalg.pinv(cov_mat)
 
-    def _quantizer(model: AnCockrellModel, row_idx: int, col_idx: int) -> EpiType:
+    def _quantizer(
+        model: AnCockrellModel, epi_state: np.ndarray, row_idx: int, col_idx: int
+    ) -> EpiType:
         spatial_vars = [
             model.epithelium_ros_damage_counter,  # idx: 5
             model.epi_regrow_counter,  # idx: 6
@@ -108,33 +44,41 @@ def quantization_maker() -> Callable[[AnCockrellModel, int, int], EpiType]:
         ]
         block_dim = 5 + len(spatial_vars)
 
-        # assemble the sample as a vector
-        sample = np.zeros(shape=(9 * block_dim,), dtype=np.float64)
-        for block_idx, (row_delta, col_delta) in enumerate(
-            (
+        moore_neighborhood = (
                 (0, 0),
                 (-1, -1),
                 (-1, 0),
                 (-1, 1),
                 (0, -1),
-                # (0,0) put first
+                # (0,0) put first, otherwise lexicographic order
                 (0, 1),
                 (1, -1),
                 (1, 0),
                 (1, 1),
             )
-        ):
+
+        # assemble the sample as a vector
+        sample = np.zeros(shape=(9 * block_dim,), dtype=np.float64)
+        for block_idx, (row_delta, col_delta) in enumerate(moore_neighborhood):
             block_row = (row_idx + row_delta) % model.geometry[0]
             block_col = (col_idx + col_delta) % model.geometry[1]
 
-            sample[
-                block_idx * block_dim : 5 + block_idx * block_dim
-            ] = epitype_one_hot_encoding(model.epithelium[block_row, block_col])
+            sample[block_idx * block_dim : 5 + block_idx * block_dim] = epi_state[
+                block_row, block_col, :
+            ]
             for idx, spatial_var in enumerate(spatial_vars, 5):
                 sample[idx + block_idx * block_dim] = spatial_var[block_row, block_col]
 
+        # compute neighborhood state counts
+        neighbor_states = np.full(len(EpiType), 0.1, dtype=np.float64)
+        for row_delta, col_delta in moore_neighborhood:
+            block_row = (row_idx + row_delta) % model.geometry[0]
+            block_col = (col_idx + col_delta) % model.geometry[1]
+            neighbor_states[model.epithelium[block_row,block_col]] += 1
+        neighbor_states /= np.sum(neighbor_states)
+
         # evaluate the various quantizations
-        min_type = None
+        min_type = -1
         min_neg_log_likelihood = float("inf")
         for epitype in EpiType:
             # setup for quantized state
@@ -142,9 +86,11 @@ def quantization_maker() -> Callable[[AnCockrellModel, int, int], EpiType]:
             quantized_state[: len(EpiType)] = epitype_one_hot_encoding(epitype)
 
             # check if min neg_log_likelihood (= max probability)
-            quantized_neg_log_likelihood = (
-                (quantized_state - mean) @ cov_mat_inv @ (quantized_state - mean)
+            quantized_neg_log_likelihood = np.sum(
+                (quantized_state[:5] - sample[:5]) ** 2
             )
+            quantized_neg_log_likelihood += (quantized_state - mean) @ cov_mat_inv @ (quantized_state - mean) / 500
+            quantized_neg_log_likelihood += -10*np.log(neighbor_states[epitype])
             if quantized_neg_log_likelihood < min_neg_log_likelihood:
                 min_type = epitype
                 min_neg_log_likelihood = quantized_neg_log_likelihood
@@ -165,60 +111,100 @@ def floyd_steinberg_dither(
     new_epi_counts,
 ) -> np.ndarray:
     # store spatial distribution of one-hot encoding for epithelial cell type
-    state_vecs = np.zeros(shape=(*model.geometry, 5), dtype=np.float64)
-    state_vecs[:, :, :5] = epitype_one_hot_encoding(model.epithelium)
+    # state_vecs = np.zeros(shape=(*model.geometry, 5), dtype=np.float64)
+    state_vecs = epitype_one_hot_encoding(model.epithelium)
+
+    fig, axs = plt.subplots(3, 3, figsize=(4*3,4*3))
+    axs = axs.reshape(-1)
+    # orig_cat_plot =
+    axs[0].imshow(np.argmax(state_vecs, axis=2), vmin=0, vmax=4)
+    axs[-1].axis("off")
+    axs[-2].axis("off")
 
     # counts of epi cell types for the incoming model
-    prev_epi_count = np.sum(state_vecs, axis=[0, 1])
+    prev_epi_count = np.sum(state_vecs, axis=(0, 1), dtype=int)
 
     # alter the state vec to be compatible with the macro state encoded by new_epi_counts
     for idx, (new_count, prev_count) in enumerate(zip(new_epi_counts, prev_epi_count)):
-        if prev_count > 0:
+        if prev_count == new_count:
+            pass
+        elif prev_count > 0:
+            # if there is some of this type already existing, scale the state to match new macrostate
             state_vecs[:, :, idx] *= new_count / prev_count
         elif new_count > 0:
-            # stick it somewhere, wherever the error builds up and other things are ambiguous
+            # if there isn't any of this type already existing, base the state on a random field.
             rand_field = smooth_random_field(model.geometry)
             state_vecs[:, :, idx] = new_count * rand_field / np.sum(rand_field)
 
-    # categorical encoding for the new epithelial distribution
-    new_epithelium = np.zeros(shape=model.geometry, dtype=EpiType)
+    new_cat_plot = axs[1].imshow(np.argmax(state_vecs, axis=2), vmin=0, vmax=4)
+    state_plots = [
+        axs[idx + 2].imshow(state_vecs[:, :, idx], vmin=0, vmax=1.5) for idx in range(5)
+    ]
+    axs[0].set_title("Orig Category")
+    axs[1].set_title("Category")
+    axs[2].set_title("Empty")
+    axs[3].set_title("Healthy")
+    axs[4].set_title("Infected")
+    axs[5].set_title("Dead")
+    axs[6].set_title("Apoptosed")
+    fig.tight_layout()
+    input()
 
-    for double_row_idx in range(2 * model.geometry[0]):
-        for double_col_idx in range(2 * model.geometry[1]):
+    for double_row_idx in range(2*model.geometry[0]):
+        for double_col_idx in range(2+model.geometry[1]):
             row_idx = double_row_idx % model.geometry[0]
             col_idx = double_col_idx % model.geometry[1]
 
             # cell_type = np.argmax(state_vecs[row_idx, col_idx, :])
-            cell_type: EpiType = quantizer(model, row_idx, col_idx)
+            cell_type: EpiType = quantizer(model, state_vecs, row_idx, col_idx)
 
             # TODO: consistency checks for these cell types (internal virus, etc)
-            new_epithelium[row_idx, col_idx] = cell_type
             one_hot = epitype_one_hot_encoding(cell_type)
             error = state_vecs[row_idx, col_idx, :] - one_hot
             state_vecs[row_idx, col_idx, :] = one_hot
 
-            state_vecs[row_idx, (col_idx + 1) % state_vecs.shape[1], :] += (
-                error * 7 / 16
-            )
+            # assert (
+            #     state_vecs[row_idx, col_idx, 3] == 0.0
+            #     and state_vecs[row_idx, col_idx, 4] == 0.0
+            # ), f"{row_idx=}, {col_idx=}, {error=}, {one_hot=}, {state_vecs[row_idx,col_idx]=}"
+
+            # print(cell_type, one_hot, error, state_vecs[row_idx,col_idx,:])
+            print(np.sum(state_vecs, axis=(0, 1)))
+
+            new_cat_plot.set_data(np.argmax(state_vecs, axis=2))
+            for idx in range(5):
+                state_plots[idx].set_data(state_vecs[:, :, idx])
+            plt.pause(0.01)
+            # time.sleep(0.1)
+
+            # floyd steinberg weights
+            # weights = (7 / 16, 3 / 16, 5 / 16, 1 / 16)
+            # even weights
+            weights = (1 / 4, 1 / 4, 1 / 4, 1 / 4)
+
+            num_rows = model.geometry[0]
+            num_cols = model.geometry[1]
+            row_idx_plus = (row_idx + 1) % num_rows
+            col_idx_plus = (col_idx + 1) % num_cols
+            col_idx_minus = (col_idx - 1) % num_cols
+            state_vecs[row_idx, col_idx_plus, :] += error * weights[0]
             state_vecs[
-                (row_idx + 1) % state_vecs.shape[0],
-                (col_idx - 1) % state_vecs.shape[1],
+                row_idx_plus,
+                col_idx_minus,
                 :,
             ] += (
-                error * 3 / 16
+                error * weights[1]
             )
-            state_vecs[(row_idx + 1) % state_vecs.shape[0], col_idx, :] += (
-                error * 5 / 16
-            )
+            state_vecs[row_idx_plus, col_idx, :] += error * weights[2]
             state_vecs[
-                (row_idx + 1) % state_vecs.shape[0],
-                (col_idx + 1) % state_vecs.shape[1],
+                row_idx_plus,
+                col_idx_plus,
                 :,
             ] += (
-                error / 16
+                error * weights[3]
             )
 
-    return new_epithelium
+    return np.argmax(state_vecs, axis=2)
 
 
 # from modify_spatial import floyd_steinberg_dither
@@ -351,7 +337,15 @@ def modify_model(
 
     ################################################################################
 
-    model.epithelium[:] = floyd_steinberg_dither(
+    fig, axs = plt.subplots(2)
+    dither = floyd_steinberg_dither(
+        model, compute_desired_epi_counts(desired_state, model, state_var_indices)
+    )
+    axs[0].imshow(model.epithelium.astype(int), vmin=0, vmax=4)
+    axs[1].imshow(dither.astype(int), vmin=0, vmax=4)
+    input()
+
+    model.epithelium[:, :] = floyd_steinberg_dither(
         model, compute_desired_epi_counts(desired_state, model, state_var_indices)
     )
 
