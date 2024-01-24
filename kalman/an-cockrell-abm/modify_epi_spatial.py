@@ -1,6 +1,7 @@
-from typing import Callable
+from typing import Callable, Tuple
 
 import h5py
+import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy as np
 from an_cockrell import AnCockrellModel, EndoType, EpiType, epitype_one_hot_encoding
@@ -45,17 +46,17 @@ def quantization_maker() -> Callable[[AnCockrellModel, np.ndarray, int, int], Ep
         block_dim = 5 + len(spatial_vars)
 
         moore_neighborhood = (
-                (0, 0),
-                (-1, -1),
-                (-1, 0),
-                (-1, 1),
-                (0, -1),
-                # (0,0) put first, otherwise lexicographic order
-                (0, 1),
-                (1, -1),
-                (1, 0),
-                (1, 1),
-            )
+            (0, 0),
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (0, -1),
+            # (0,0) put first, otherwise lexicographic order
+            (0, 1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+        )
 
         # assemble the sample as a vector
         sample = np.zeros(shape=(9 * block_dim,), dtype=np.float64)
@@ -69,15 +70,19 @@ def quantization_maker() -> Callable[[AnCockrellModel, np.ndarray, int, int], Ep
             for idx, spatial_var in enumerate(spatial_vars, 5):
                 sample[idx + block_idx * block_dim] = spatial_var[block_row, block_col]
 
-        # compute neighborhood state counts
-        neighbor_states = np.full(len(EpiType), 0.1, dtype=np.float64)
+        # compute neighborhood state counts, pre-seeded with 1's
+        neighbor_states = np.full(len(EpiType), 1.0, dtype=np.float64)
         for row_delta, col_delta in moore_neighborhood:
             block_row = (row_idx + row_delta) % model.geometry[0]
             block_col = (col_idx + col_delta) % model.geometry[1]
-            neighbor_states[model.epithelium[block_row,block_col]] += 1
-        neighbor_states /= np.sum(neighbor_states)
+            neighbor_states[model.epithelium[block_row, block_col]] += 1
 
         # evaluate the various quantizations
+        loss_weights = {
+            "similarity": 1.0,
+            "typical_neighborhood": 0.002,
+            "neighbor_similarity": 1.0,
+        }
         min_type = -1
         min_neg_log_likelihood = float("inf")
         for epitype in EpiType:
@@ -85,12 +90,22 @@ def quantization_maker() -> Callable[[AnCockrellModel, np.ndarray, int, int], Ep
             quantized_state = sample.copy()
             quantized_state[: len(EpiType)] = epitype_one_hot_encoding(epitype)
 
-            # check if min neg_log_likelihood (= max probability)
-            quantized_neg_log_likelihood = np.sum(
+            # prefer to be close to the natural quantization
+            quantized_neg_log_likelihood = loss_weights["similarity"] * np.sum(
                 (quantized_state[:5] - sample[:5]) ** 2
             )
-            quantized_neg_log_likelihood += (quantized_state - mean) @ cov_mat_inv @ (quantized_state - mean) / 500
-            quantized_neg_log_likelihood += -10*np.log(neighbor_states[epitype])
+            # prefer to be a typical local neighborhood
+            quantized_neg_log_likelihood += (
+                loss_weights["typical_neighborhood"]
+                * (quantized_state - mean)
+                @ cov_mat_inv
+                @ (quantized_state - mean)
+            )
+            # prefer to be like one's neighbors
+            # omitting an + np.log(np.sum(neighbor_states)) term since it is a per neighborhood constant
+            quantized_neg_log_likelihood += loss_weights["neighbor_similarity"] * (
+                -np.log(neighbor_states[epitype])
+            )
             if quantized_neg_log_likelihood < min_neg_log_likelihood:
                 min_type = epitype
                 min_neg_log_likelihood = quantized_neg_log_likelihood
@@ -109,12 +124,12 @@ quantizer = quantization_maker()
 def floyd_steinberg_dither(
     model: AnCockrellModel,
     new_epi_counts,
-) -> np.ndarray:
+) -> Tuple[np.ndarray, animation.FuncAnimation]:
     # store spatial distribution of one-hot encoding for epithelial cell type
     # state_vecs = np.zeros(shape=(*model.geometry, 5), dtype=np.float64)
     state_vecs = epitype_one_hot_encoding(model.epithelium)
 
-    fig, axs = plt.subplots(3, 3, figsize=(4*3,4*3))
+    fig, axs = plt.subplots(3, 3, figsize=(3 * 3, 3 * 3))
     axs = axs.reshape(-1)
     # orig_cat_plot =
     axs[0].imshow(np.argmax(state_vecs, axis=2), vmin=0, vmax=4)
@@ -148,63 +163,65 @@ def floyd_steinberg_dither(
     axs[5].set_title("Dead")
     axs[6].set_title("Apoptosed")
     fig.tight_layout()
-    input()
 
-    for double_row_idx in range(2*model.geometry[0]):
-        for double_col_idx in range(2+model.geometry[1]):
-            row_idx = double_row_idx % model.geometry[0]
-            col_idx = double_col_idx % model.geometry[1]
+    num_frames = (2 * model.geometry[0]) * (2 + model.geometry[1])
 
-            # cell_type = np.argmax(state_vecs[row_idx, col_idx, :])
-            cell_type: EpiType = quantizer(model, state_vecs, row_idx, col_idx)
+    def update(frame_num: int):
+        modulus = 2 + model.geometry[1]
+        double_row_idx, double_col_idx = divmod(frame_num, modulus)
 
-            # TODO: consistency checks for these cell types (internal virus, etc)
-            one_hot = epitype_one_hot_encoding(cell_type)
-            error = state_vecs[row_idx, col_idx, :] - one_hot
-            state_vecs[row_idx, col_idx, :] = one_hot
+        row_idx = double_row_idx % model.geometry[0]
+        col_idx = double_col_idx % model.geometry[1]
 
-            # assert (
-            #     state_vecs[row_idx, col_idx, 3] == 0.0
-            #     and state_vecs[row_idx, col_idx, 4] == 0.0
-            # ), f"{row_idx=}, {col_idx=}, {error=}, {one_hot=}, {state_vecs[row_idx,col_idx]=}"
+        # cell_type = np.argmax(state_vecs[row_idx, col_idx, :])
+        cell_type: EpiType = quantizer(model, state_vecs, row_idx, col_idx)
 
-            # print(cell_type, one_hot, error, state_vecs[row_idx,col_idx,:])
-            print(np.sum(state_vecs, axis=(0, 1)))
+        # TODO: consistency checks for these cell types (internal virus, etc)
+        one_hot = epitype_one_hot_encoding(cell_type)
+        error = state_vecs[row_idx, col_idx, :] - one_hot
+        state_vecs[row_idx, col_idx, :] = one_hot
 
-            new_cat_plot.set_data(np.argmax(state_vecs, axis=2))
-            for idx in range(5):
-                state_plots[idx].set_data(state_vecs[:, :, idx])
-            plt.pause(0.01)
-            # time.sleep(0.1)
+        # assert (
+        #     state_vecs[row_idx, col_idx, 3] == 0.0
+        #     and state_vecs[row_idx, col_idx, 4] == 0.0
+        # ), f"{row_idx=}, {col_idx=}, {error=}, {one_hot=}, {state_vecs[row_idx,col_idx]=}"
 
-            # floyd steinberg weights
-            # weights = (7 / 16, 3 / 16, 5 / 16, 1 / 16)
-            # even weights
-            weights = (1 / 4, 1 / 4, 1 / 4, 1 / 4)
+        new_cat_plot.set_data(np.argmax(state_vecs, axis=2))
+        for idx in range(5):
+            state_plots[idx].set_data(state_vecs[:, :, idx])
 
-            num_rows = model.geometry[0]
-            num_cols = model.geometry[1]
-            row_idx_plus = (row_idx + 1) % num_rows
-            col_idx_plus = (col_idx + 1) % num_cols
-            col_idx_minus = (col_idx - 1) % num_cols
-            state_vecs[row_idx, col_idx_plus, :] += error * weights[0]
-            state_vecs[
-                row_idx_plus,
-                col_idx_minus,
-                :,
-            ] += (
-                error * weights[1]
-            )
-            state_vecs[row_idx_plus, col_idx, :] += error * weights[2]
-            state_vecs[
-                row_idx_plus,
-                col_idx_plus,
-                :,
-            ] += (
-                error * weights[3]
-            )
+        # time.sleep(0.1)
 
-    return np.argmax(state_vecs, axis=2)
+        # floyd steinberg weights
+        weights = (7 / 16, 3 / 16, 5 / 16, 1 / 16)
+        # uniform weights
+        # weights = (1 / 4, 1 / 4, 1 / 4, 1 / 4)
+
+        num_rows = model.geometry[0]
+        num_cols = model.geometry[1]
+        row_idx_plus = (row_idx + 1) % num_rows
+        col_idx_plus = (col_idx + 1) % num_cols
+        col_idx_minus = (col_idx - 1) % num_cols
+        state_vecs[row_idx, col_idx_plus, :] += error * weights[0]
+        state_vecs[
+            row_idx_plus,
+            col_idx_minus,
+            :,
+        ] += (
+            error * weights[1]
+        )
+        state_vecs[row_idx_plus, col_idx, :] += error * weights[2]
+        state_vecs[
+            row_idx_plus,
+            col_idx_plus,
+            :,
+        ] += (
+            error * weights[3]
+        )
+
+    ani = animation.FuncAnimation(fig=fig, func=update, frames=num_frames, interval=30)
+
+    return np.argmax(state_vecs, axis=2), ani
 
 
 # from modify_spatial import floyd_steinberg_dither

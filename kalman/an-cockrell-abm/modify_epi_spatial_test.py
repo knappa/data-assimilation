@@ -206,7 +206,10 @@ axs[2].imshow(
     model.epithelium.astype(int) - updated_epithelium.astype(int), vmin=-4, vmax=4
 )
 
-print("number of changed epis", np.sum(model.epithelium.astype(int) != updated_epithelium.astype(int)))
+print(
+    "number of changed epis",
+    np.sum(model.epithelium.astype(int) != updated_epithelium.astype(int)),
+)
 
 modify_model(
     model,
