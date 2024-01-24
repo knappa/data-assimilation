@@ -1,6 +1,9 @@
+from typing import Callable, Tuple
 from typing import Callable, Iterable
 
 import h5py
+import matplotlib.animation as animation
+import matplotlib.pyplot as plt
 import numpy as np
 from an_cockrell import AnCockrellModel, EndoType, EpiType, epitype_one_hot_encoding
 
@@ -83,7 +86,7 @@ def quantization_maker(
         for row_delta, col_delta in moore_neighborhood:
             block_row = (row_idx + row_delta) % model.geometry[0]
             block_col = (col_idx + col_delta) % model.geometry[1]
-            neighbor_states[model.epithelium[block_row, block_col]] += 1
+            neighbor_states[model.epithelium[block_row,block_col]] += 1
 
         # evaluate the various quantizations
         min_type = -1
@@ -136,10 +139,17 @@ quantizer = quantization_maker(
 def dither(
     model: AnCockrellModel,
     new_epi_counts,
-) -> np.ndarray:
+) -> Tuple[np.ndarray, animation.FuncAnimation]:
     # store spatial distribution of one-hot encoding for epithelial cell type
     # state_vecs = np.zeros(shape=(*model.geometry, 5), dtype=np.float64)
     state_vecs = epitype_one_hot_encoding(model.epithelium)
+
+    fig, axs = plt.subplots(3, 3, figsize=(3 * 3, 3 * 3))
+    axs = axs.reshape(-1)
+    # orig_cat_plot =
+    axs[0].imshow(np.argmax(state_vecs, axis=2), vmin=0, vmax=4)
+    axs[-1].axis("off")
+    axs[-2].axis("off")
 
     # counts of epi cell types for the incoming model
     prev_epi_count = np.sum(state_vecs, axis=(0, 1), dtype=int)
@@ -158,6 +168,21 @@ def dither(
     # ensure that all locations sum to 1
     state_vecs += ((1 - np.sum(state_vecs, axis=2)) / len(EpiType))[:, :, np.newaxis]
 
+    new_cat_plot = axs[1].imshow(np.argmax(state_vecs, axis=2), vmin=0, vmax=4)
+    state_plots = [
+        axs[idx + 2].imshow(state_vecs[:, :, idx], vmin=0, vmax=1.5) for idx in range(5)
+    ]
+    axs[0].set_title("Orig Category")
+    axs[1].set_title("Category")
+    axs[2].set_title("Empty")
+    axs[3].set_title("Healthy")
+    axs[4].set_title("Infected")
+    axs[5].set_title("Dead")
+    axs[6].set_title("Apoptosed")
+    fig.tight_layout()
+
+    num_frames = (2 * model.geometry[0]) * (2 + model.geometry[1])
+
     newly_set_epi_counts = np.zeros(len(EpiType), dtype=np.int64)
 
     for row_idx in range(model.geometry[0]):
@@ -169,6 +194,12 @@ def dither(
                 for epitype in EpiType
                 if newly_set_epi_counts[epitype] < new_epi_counts[epitype]
             ]
+    def update(frame_num: int):
+        modulus = 2 + model.geometry[1]
+        double_row_idx, double_col_idx = divmod(frame_num, modulus)
+
+        row_idx = double_row_idx % model.geometry[0]
+        col_idx = double_col_idx % model.geometry[1]
 
             # find the new type
             cell_type: EpiType = quantizer(
@@ -177,12 +208,37 @@ def dither(
 
             # update counts
             newly_set_epi_counts[cell_type] += 1
+        # cell_type = np.argmax(state_vecs[row_idx, col_idx, :])
+        cell_type: EpiType = quantizer(model, state_vecs, row_idx, col_idx)
 
             # TODO: consistency checks for these cell types (internal virus, etc)
 
             one_hot = epitype_one_hot_encoding(cell_type)
             error = state_vecs[row_idx, col_idx, :] - one_hot
             state_vecs[row_idx, col_idx, :] = one_hot
+        # TODO: consistency checks for these cell types (internal virus, etc)
+        one_hot = epitype_one_hot_encoding(cell_type)
+        error = state_vecs[row_idx, col_idx, :] - one_hot
+        state_vecs[row_idx, col_idx, :] = one_hot
+
+        # assert (
+        #     state_vecs[row_idx, col_idx, 3] == 0.0
+        #     and state_vecs[row_idx, col_idx, 4] == 0.0
+        # ), f"{row_idx=}, {col_idx=}, {error=}, {one_hot=}, {state_vecs[row_idx,col_idx]=}"
+
+            # print(cell_type, one_hot, error, state_vecs[row_idx,col_idx,:])
+            # print(np.sum(state_vecs, axis=(0, 1)))
+
+            new_cat_plot.set_data(np.argmax(state_vecs, axis=2))
+            for idx in range(5):
+                state_plots[idx].set_data(state_vecs[:, :, idx])
+            plt.pause(0.01)
+            # time.sleep(0.1)
+        new_cat_plot.set_data(np.argmax(state_vecs, axis=2))
+        for idx in range(5):
+            state_plots[idx].set_data(state_vecs[:, :, idx])
+
+        # time.sleep(0.1)
 
             # floyd steinberg weights
             # weights = (7 / 16, 3 / 16, 5 / 16, 1 / 16)
@@ -202,6 +258,10 @@ def dither(
                 else:
                     # interior
                     weights = (1 / 4, 1 / 4, 1 / 4, 1 / 4)
+        # floyd steinberg weights
+        weights = (7 / 16, 3 / 16, 5 / 16, 1 / 16)
+        # uniform weights
+        # weights = (1 / 4, 1 / 4, 1 / 4, 1 / 4)
 
             num_rows = model.geometry[0]
             num_cols = model.geometry[1]
@@ -256,8 +316,31 @@ def dither(
             state_vecs[row_idx_plus, col_idx_plus, :] += (
                 1 - np.sum(state_vecs[row_idx_plus, col_idx_plus, :])
             ) / len(EpiType)
+        num_rows = model.geometry[0]
+        num_cols = model.geometry[1]
+        row_idx_plus = (row_idx + 1) % num_rows
+        col_idx_plus = (col_idx + 1) % num_cols
+        col_idx_minus = (col_idx - 1) % num_cols
+        state_vecs[row_idx, col_idx_plus, :] += error * weights[0]
+        state_vecs[
+            row_idx_plus,
+            col_idx_minus,
+            :,
+        ] += (
+            error * weights[1]
+        )
+        state_vecs[row_idx_plus, col_idx, :] += error * weights[2]
+        state_vecs[
+            row_idx_plus,
+            col_idx_plus,
+            :,
+        ] += (
+            error * weights[3]
+        )
 
-    return np.argmax(state_vecs, axis=2)
+    ani = animation.FuncAnimation(fig=fig, func=update, frames=num_frames, interval=30)
+
+    return np.argmax(state_vecs, axis=2), ani
 
 
 def modify_model(
