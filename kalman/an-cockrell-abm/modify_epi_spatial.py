@@ -123,7 +123,7 @@ quantizer = quantization_maker(
     quantization_similarity_loss_weight=1.0,
     typical_neighborhood_loss_weight=0.002,
     neighbor_similarity_loss_weight=1.0,
-    statistics_hdf5_file= "local-nbhd-statistics.hdf5",
+    statistics_hdf5_file="local-nbhd-statistics.hdf5",
 )
 
 
@@ -178,7 +178,6 @@ def dither(
 
     for row_idx in range(model.geometry[0]):
         for col_idx in range(model.geometry[1]):
-
             # compute which epitypes are available for placement, where available means that we have not yet used
             # up all requested instances.
             available_epitypes = [
@@ -193,7 +192,7 @@ def dither(
             )
 
             # update counts
-            available_epitypes[cell_type] += 1
+            newly_set_epi_counts[cell_type] += 1
 
             # TODO: consistency checks for these cell types (internal virus, etc)
 
@@ -207,7 +206,7 @@ def dither(
             # ), f"{row_idx=}, {col_idx=}, {error=}, {one_hot=}, {state_vecs[row_idx,col_idx]=}"
 
             # print(cell_type, one_hot, error, state_vecs[row_idx,col_idx,:])
-            print(np.sum(state_vecs, axis=(0, 1)))
+            # print(np.sum(state_vecs, axis=(0, 1)))
 
             new_cat_plot.set_data(np.argmax(state_vecs, axis=2))
             for idx in range(5):
@@ -218,7 +217,21 @@ def dither(
             # floyd steinberg weights
             # weights = (7 / 16, 3 / 16, 5 / 16, 1 / 16)
             # even weights
-            weights = (1 / 4, 1 / 4, 1 / 4, 1 / 4)
+            # weights -> ( (r,c+1), (r+1,c-1), (r+1,c), (r+1,c+1))
+            if col_idx == model.geometry[1] - 1:
+                if row_idx == model.geometry[0] - 1:
+                    # last element, do not propagate error
+                    weights = (0, 0, 0, 0)
+                else:
+                    # right column, do not propagate error to right
+                    weights = (0, 1 / 2, 1 / 2, 0)
+            else:
+                if row_idx == model.geometry[0] - 1:
+                    # top row, do not propagate error down
+                    weights = (1, 0, 0, 0)
+                else:
+                    # interior
+                    weights = (1 / 4, 1 / 4, 1 / 4, 1 / 4)
 
             num_rows = model.geometry[0]
             num_cols = model.geometry[1]
