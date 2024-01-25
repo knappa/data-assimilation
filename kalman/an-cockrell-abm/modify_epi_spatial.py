@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Iterable
 
 import h5py
 import matplotlib.pyplot as plt
@@ -10,15 +10,25 @@ from util import compute_desired_epi_counts, smooth_random_field
 ################################################################################
 
 
-def quantization_maker() -> Callable[[AnCockrellModel, np.ndarray, int, int], EpiType]:
-    with h5py.File("local-nbhd-statistics.hdf5", "r") as h5file:
+def quantization_maker(
+    *,
+    quantization_similarity_loss_weight: float,
+    typical_neighborhood_loss_weight: float,
+    neighbor_similarity_loss_weight: float,
+    statistics_hdf5_file: str,
+) -> Callable[[AnCockrellModel, np.ndarray, Iterable[EpiType], int, int], EpiType]:
+    with h5py.File(statistics_hdf5_file, "r") as h5file:
         mean = h5file["mean"][:]
         cov_mat = h5file["cov_mat"][:, :]
         # num_samples = h5file['num_samples'][()]
     cov_mat_inv = np.linalg.pinv(cov_mat)
 
     def _quantizer(
-        model: AnCockrellModel, epi_state: np.ndarray, row_idx: int, col_idx: int
+        model: AnCockrellModel,
+        epi_state: np.ndarray,
+        available_epitypes: Iterable[EpiType],
+        row_idx: int,
+        col_idx: int,
     ) -> EpiType:
         spatial_vars = [
             model.epithelium_ros_damage_counter,  # idx: 5
@@ -45,17 +55,17 @@ def quantization_maker() -> Callable[[AnCockrellModel, np.ndarray, int, int], Ep
         block_dim = 5 + len(spatial_vars)
 
         moore_neighborhood = (
-                (0, 0),
-                (-1, -1),
-                (-1, 0),
-                (-1, 1),
-                (0, -1),
-                # (0,0) put first, otherwise lexicographic order
-                (0, 1),
-                (1, -1),
-                (1, 0),
-                (1, 1),
-            )
+            (0, 0),
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (0, -1),
+            # (0,0) put first, otherwise lexicographic order
+            (0, 1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+        )
 
         # assemble the sample as a vector
         sample = np.zeros(shape=(9 * block_dim,), dtype=np.float64)
@@ -70,27 +80,36 @@ def quantization_maker() -> Callable[[AnCockrellModel, np.ndarray, int, int], Ep
                 sample[idx + block_idx * block_dim] = spatial_var[block_row, block_col]
 
         # compute neighborhood state counts
-        neighbor_states = np.full(len(EpiType), 0.1, dtype=np.float64)
+        neighbor_states = np.full(len(EpiType), 1.0, dtype=np.float64)
         for row_delta, col_delta in moore_neighborhood:
             block_row = (row_idx + row_delta) % model.geometry[0]
             block_col = (col_idx + col_delta) % model.geometry[1]
-            neighbor_states[model.epithelium[block_row,block_col]] += 1
-        neighbor_states /= np.sum(neighbor_states)
+            neighbor_states[model.epithelium[block_row, block_col]] += 1
 
         # evaluate the various quantizations
         min_type = -1
         min_neg_log_likelihood = float("inf")
-        for epitype in EpiType:
+        for epitype in available_epitypes:
             # setup for quantized state
             quantized_state = sample.copy()
             quantized_state[: len(EpiType)] = epitype_one_hot_encoding(epitype)
 
-            # check if min neg_log_likelihood (= max probability)
-            quantized_neg_log_likelihood = np.sum(
+            # prefer to be close to the natural quantization
+            quantized_neg_log_likelihood = quantization_similarity_loss_weight * np.sum(
                 (quantized_state[:5] - sample[:5]) ** 2
             )
-            quantized_neg_log_likelihood += (quantized_state - mean) @ cov_mat_inv @ (quantized_state - mean) / 500
-            quantized_neg_log_likelihood += -10*np.log(neighbor_states[epitype])
+            # prefer to be a typical local neighborhood
+            quantized_neg_log_likelihood += (
+                typical_neighborhood_loss_weight
+                * (quantized_state - mean)
+                @ cov_mat_inv
+                @ (quantized_state - mean)
+            )
+            # prefer to be like one's neighbors
+            # omitting an + np.log(np.sum(neighbor_states)) term since it is a per neighborhood constant
+            quantized_neg_log_likelihood += neighbor_similarity_loss_weight * (
+                -np.log(neighbor_states[epitype])
+            )
             if quantized_neg_log_likelihood < min_neg_log_likelihood:
                 min_type = epitype
                 min_neg_log_likelihood = quantized_neg_log_likelihood
@@ -100,13 +119,18 @@ def quantization_maker() -> Callable[[AnCockrellModel, np.ndarray, int, int], Ep
     return _quantizer
 
 
-quantizer = quantization_maker()
+quantizer = quantization_maker(
+    quantization_similarity_loss_weight=1.0,
+    typical_neighborhood_loss_weight=0.002,
+    neighbor_similarity_loss_weight=1.0,
+    statistics_hdf5_file= "local-nbhd-statistics.hdf5",
+)
 
 
 ################################################################################
 
 
-def floyd_steinberg_dither(
+def dither(
     model: AnCockrellModel,
     new_epi_counts,
 ) -> np.ndarray:
@@ -114,7 +138,7 @@ def floyd_steinberg_dither(
     # state_vecs = np.zeros(shape=(*model.geometry, 5), dtype=np.float64)
     state_vecs = epitype_one_hot_encoding(model.epithelium)
 
-    fig, axs = plt.subplots(3, 3, figsize=(4*3,4*3))
+    fig, axs = plt.subplots(3, 3, figsize=(4 * 3, 4 * 3))
     axs = axs.reshape(-1)
     # orig_cat_plot =
     axs[0].imshow(np.argmax(state_vecs, axis=2), vmin=0, vmax=4)
@@ -150,15 +174,29 @@ def floyd_steinberg_dither(
     fig.tight_layout()
     input()
 
-    for double_row_idx in range(2*model.geometry[0]):
-        for double_col_idx in range(2+model.geometry[1]):
-            row_idx = double_row_idx % model.geometry[0]
-            col_idx = double_col_idx % model.geometry[1]
+    newly_set_epi_counts = np.zeros(len(EpiType), dtype=np.int64)
 
-            # cell_type = np.argmax(state_vecs[row_idx, col_idx, :])
-            cell_type: EpiType = quantizer(model, state_vecs, row_idx, col_idx)
+    for row_idx in range(model.geometry[0]):
+        for col_idx in range(model.geometry[1]):
+
+            # compute which epitypes are available for placement, where available means that we have not yet used
+            # up all requested instances.
+            available_epitypes = [
+                epitype
+                for epitype in EpiType
+                if newly_set_epi_counts[epitype] < new_epi_counts[epitype]
+            ]
+
+            # find the new type
+            cell_type: EpiType = quantizer(
+                model, state_vecs, available_epitypes, row_idx, col_idx
+            )
+
+            # update counts
+            available_epitypes[cell_type] += 1
 
             # TODO: consistency checks for these cell types (internal virus, etc)
+
             one_hot = epitype_one_hot_encoding(cell_type)
             error = state_vecs[row_idx, col_idx, :] - one_hot
             state_vecs[row_idx, col_idx, :] = one_hot
@@ -338,14 +376,14 @@ def modify_model(
     ################################################################################
 
     fig, axs = plt.subplots(2)
-    dither = floyd_steinberg_dither(
+    dither_result = dither(
         model, compute_desired_epi_counts(desired_state, model, state_var_indices)
     )
     axs[0].imshow(model.epithelium.astype(int), vmin=0, vmax=4)
-    axs[1].imshow(dither.astype(int), vmin=0, vmax=4)
+    axs[1].imshow(dither_result.astype(int), vmin=0, vmax=4)
     input()
 
-    model.epithelium[:, :] = floyd_steinberg_dither(
+    model.epithelium[:, :] = dither(
         model, compute_desired_epi_counts(desired_state, model, state_var_indices)
     )
 

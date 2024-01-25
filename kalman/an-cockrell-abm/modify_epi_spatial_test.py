@@ -184,9 +184,9 @@ new_macro_state = macro_state.copy()
 new_macro_state[state_var_indices["healthy_epithelium_count"]] += 300
 new_macro_state[state_var_indices["infected_epithelium_count"]] -= 300
 
-from modify_epi_spatial import floyd_steinberg_dither, quantizer
+from modify_epi_spatial import dither, quantizer
 
-updated_epithelium = floyd_steinberg_dither(
+updated_epithelium = dither(
     model,
     new_macro_state[
         [
@@ -206,7 +206,10 @@ axs[2].imshow(
     model.epithelium.astype(int) - updated_epithelium.astype(int), vmin=-4, vmax=4
 )
 
-print("number of changed epis", np.sum(model.epithelium.astype(int) != updated_epithelium.astype(int)))
+print(
+    "number of changed epis",
+    np.sum(model.epithelium.astype(int) != updated_epithelium.astype(int)),
+)
 
 modify_model(
     model,
