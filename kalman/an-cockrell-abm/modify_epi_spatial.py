@@ -160,7 +160,7 @@ def dither(
             rand_field = smooth_random_field(model.geometry)
             state_vecs[:, :, idx] = new_count * rand_field / np.sum(rand_field)
     # ensure that all locations sum to 1
-    state_vecs += ((1-np.sum(state_vecs,axis=2)) / len(EpiType))[:,:,np.newaxis]
+    state_vecs += ((1 - np.sum(state_vecs, axis=2)) / len(EpiType))[:, :, np.newaxis]
 
     new_cat_plot = axs[1].imshow(np.argmax(state_vecs, axis=2), vmin=0, vmax=4)
     state_plots = [
@@ -246,7 +246,9 @@ def dither(
             # xxx
             state_vecs[row_idx, col_idx_plus, :] += error * weights[0]
             # ensure it sums to 1
-            state_vecs[row_idx, col_idx_plus, :] += (1-np.sum(state_vecs[row_idx, col_idx_plus, :]))/len(EpiType)
+            state_vecs[row_idx, col_idx_plus, :] += (
+                1 - np.sum(state_vecs[row_idx, col_idx_plus, :])
+            ) / len(EpiType)
 
             # (r+1,c-1)
             # .*x
@@ -259,15 +261,18 @@ def dither(
                 error * weights[1]
             )
             # ensure it sums to 1
-            state_vecs[row_idx_plus, col_idx_minus, :] += (1 - np.sum(state_vecs[row_idx_plus, col_idx_minus, :])) / len(EpiType)
+            state_vecs[row_idx_plus, col_idx_minus, :] += (
+                1 - np.sum(state_vecs[row_idx_plus, col_idx_minus, :])
+            ) / len(EpiType)
 
             # (r+1,c)
             # .*x
             # xXx
             state_vecs[row_idx_plus, col_idx, :] += error * weights[2]
             # ensure it sums to 1
-            state_vecs[row_idx_plus, col_idx, :] += (1 - np.sum(
-                state_vecs[row_idx_plus, col_idx, :])) / len(EpiType)
+            state_vecs[row_idx_plus, col_idx, :] += (
+                1 - np.sum(state_vecs[row_idx_plus, col_idx, :])
+            ) / len(EpiType)
 
             # (r+1,c+1)
             # .*x
@@ -280,8 +285,9 @@ def dither(
                 error * weights[3]
             )
             # ensure it sums to 1
-            state_vecs[row_idx_plus, col_idx_plus, :] += (1 - np.sum(
-                state_vecs[row_idx_plus, col_idx_plus, :])) / len(EpiType)
+            state_vecs[row_idx_plus, col_idx_plus, :] += (
+                1 - np.sum(state_vecs[row_idx_plus, col_idx_plus, :])
+            ) / len(EpiType)
 
     return np.argmax(state_vecs, axis=2)
 
