@@ -184,7 +184,7 @@ new_macro_state = macro_state.copy()
 new_macro_state[state_var_indices["healthy_epithelium_count"]] += 300
 new_macro_state[state_var_indices["infected_epithelium_count"]] -= 300
 
-from modify_full_spatial import dither, quantizer
+from modify_full_spatial import dither
 
 new_epi_counts = new_macro_state[
     [

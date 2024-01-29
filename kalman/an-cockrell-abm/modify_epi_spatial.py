@@ -79,7 +79,7 @@ def quantization_maker(
             for idx, spatial_var in enumerate(spatial_vars, 5):
                 sample[idx + block_idx * block_dim] = spatial_var[block_row, block_col]
 
-        # compute neighborhood state counts
+        # compute neighborhood state counts, pre-seeded by 1's as a normalization
         neighbor_states = np.full(len(EpiType), 1.0, dtype=np.float64)
         for row_delta, col_delta in moore_neighborhood:
             block_row = (row_idx + row_delta) % model.geometry[0]
@@ -114,6 +114,10 @@ def quantization_maker(
                 min_type = epitype
                 min_neg_log_likelihood = quantized_neg_log_likelihood
 
+        assert (
+            min_type != -1
+        ), f"Unable to find any EpiType among {available_epitypes} at {row_idx=},{col_idx=}"
+
         return min_type
 
     return _quantizer
@@ -138,13 +142,6 @@ def dither(
     # state_vecs = np.zeros(shape=(*model.geometry, 5), dtype=np.float64)
     state_vecs = epitype_one_hot_encoding(model.epithelium)
 
-    fig, axs = plt.subplots(3, 3, figsize=(4 * 3, 4 * 3))
-    axs = axs.reshape(-1)
-    # orig_cat_plot =
-    axs[0].imshow(np.argmax(state_vecs, axis=2), vmin=0, vmax=4)
-    axs[-1].axis("off")
-    axs[-2].axis("off")
-
     # counts of epi cell types for the incoming model
     prev_epi_count = np.sum(state_vecs, axis=(0, 1), dtype=int)
 
@@ -161,20 +158,6 @@ def dither(
             state_vecs[:, :, idx] = new_count * rand_field / np.sum(rand_field)
     # ensure that all locations sum to 1
     state_vecs += ((1 - np.sum(state_vecs, axis=2)) / len(EpiType))[:, :, np.newaxis]
-
-    new_cat_plot = axs[1].imshow(np.argmax(state_vecs, axis=2), vmin=0, vmax=4)
-    state_plots = [
-        axs[idx + 2].imshow(state_vecs[:, :, idx], vmin=0, vmax=1.5) for idx in range(5)
-    ]
-    axs[0].set_title("Orig Category")
-    axs[1].set_title("Category")
-    axs[2].set_title("Empty")
-    axs[3].set_title("Healthy")
-    axs[4].set_title("Infected")
-    axs[5].set_title("Dead")
-    axs[6].set_title("Apoptosed")
-    fig.tight_layout()
-    input()
 
     newly_set_epi_counts = np.zeros(len(EpiType), dtype=np.int64)
 
@@ -201,20 +184,6 @@ def dither(
             one_hot = epitype_one_hot_encoding(cell_type)
             error = state_vecs[row_idx, col_idx, :] - one_hot
             state_vecs[row_idx, col_idx, :] = one_hot
-
-            # assert (
-            #     state_vecs[row_idx, col_idx, 3] == 0.0
-            #     and state_vecs[row_idx, col_idx, 4] == 0.0
-            # ), f"{row_idx=}, {col_idx=}, {error=}, {one_hot=}, {state_vecs[row_idx,col_idx]=}"
-
-            # print(cell_type, one_hot, error, state_vecs[row_idx,col_idx,:])
-            # print(np.sum(state_vecs, axis=(0, 1)))
-
-            new_cat_plot.set_data(np.argmax(state_vecs, axis=2))
-            for idx in range(5):
-                state_plots[idx].set_data(state_vecs[:, :, idx])
-            plt.pause(0.01)
-            # time.sleep(0.1)
 
             # floyd steinberg weights
             # weights = (7 / 16, 3 / 16, 5 / 16, 1 / 16)
@@ -290,20 +259,6 @@ def dither(
             ) / len(EpiType)
 
     return np.argmax(state_vecs, axis=2)
-
-
-# from modify_spatial import floyd_steinberg_dither
-#
-# epithelium = np.full((50, 50), EpiType.Healthy, dtype=EpiType)
-# X, Y = np.meshgrid(np.arange(50), np.arange(50))
-# epithelium[np.sqrt((X - 25) ** 2 + (Y - 25) ** 2) < 10] = EpiType.Infected
-# epithelium[np.sqrt((X - 25) ** 2 + (Y - 50) ** 2) < 10] = EpiType.Empty
-# empty_count, healthy_count, infected_count, dead_count, apoptosed_count = [
-#     np.sum(epithelium.astype(int) == tp) for tp in range(5)
-# ]
-# new_epithelium = floyd_steinberg_dither(
-#     epithelium, healthy_count, infected_count, apoptosed_count, dead_count, empty_count
-# )
 
 
 def modify_model(
