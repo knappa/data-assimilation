@@ -80,7 +80,7 @@ def quantization_maker(
             for idx, spatial_var in enumerate(spatial_vars, 5):
                 sample[idx + block_idx * block_dim] = spatial_var[block_row, block_col]
 
-        # compute neighborhood state counts
+        # compute neighborhood state counts, pre-seeded with 1's
         neighbor_states = np.full(len(EpiType), 1.0, dtype=np.float64)
         for row_delta, col_delta in moore_neighborhood:
             block_row = (row_idx + row_delta) % model.geometry[0]
