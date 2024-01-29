@@ -2,10 +2,9 @@ import itertools
 from typing import Callable, Iterable
 
 import h5py
-import matplotlib.pyplot as plt
 import numpy as np
 from an_cockrell import AnCockrellModel, EndoType, EpiType, epitype_one_hot_encoding
-from scipy.optimize import Bounds, lsq_linear
+from scipy.optimize import Bounds, OptimizeResult, lsq_linear
 
 from util import compute_desired_epi_counts, smooth_random_field
 
@@ -41,6 +40,7 @@ def quantization_maker(
     quantization_similarity_loss_weight: float,
     typical_neighborhood_loss_weight: float,
     neighbor_similarity_loss_weight: float,
+    spatial_regularization: float,
     statistics_hdf5_file: str,
 ) -> Callable[[AnCockrellModel, np.ndarray, Iterable[EpiType], int, int], np.ndarray]:
     with h5py.File(statistics_hdf5_file, "r") as h5file:
@@ -79,7 +79,7 @@ def quantization_maker(
                 block_row, block_col, :
             ]
 
-        # compute neighborhood state counts
+        # compute neighborhood state counts, pre-seeded by 1's as a normalization
         neighbor_states = np.full(len(EpiType), 1.0, dtype=np.float64)
         for row_delta, col_delta in moore_neighborhood:
             block_row = (row_idx + row_delta) % model.geometry[0]
@@ -90,12 +90,12 @@ def quantization_maker(
         min_state = sample[:block_dim].copy()
         min_neg_log_likelihood = float("inf")
         variable_minima = np.array(
-                [
-                    0.0 if spatial_var != "endothelial_activation" else -np.inf
-                    for spatial_var in spatial_vars
-                ],
-                dtype=np.float64,
-            )
+            [
+                0.0 if spatial_var != "endothelial_activation" else -np.inf
+                for spatial_var in spatial_vars
+            ],
+            dtype=np.float64,
+        )
         variable_bounds = Bounds(
             lb=variable_minima,
             ub=np.inf,
@@ -108,13 +108,13 @@ def quantization_maker(
             quantized_state[:second_block_start_idx] = epitype_one_hot_encoding(epitype)
 
             # find optimal non-quantized values e.g. cytokine levels
-            # TODO: haha, this will be fun for someone to read after the fact. Needs so much documentation.
             # Goal here is to find a state s which comes in 3 blocks such that
             # 1. the first block is held constant (this is the quantization of the epitype)
             # 2. the second block is allowed to vary
             #    (these are the non-quantized variables at (r,c) )
-            # 3. the third block is is held constant (these are the combined states of nearby pixels)
-            # 4. s minimizes s.T @ cov_mat_inv @ s + ||s-s_{prev}||^2 subject to the above
+            # 3. the third block is held constant (these are the combined states of nearby pixels)
+            # 4. s minimizes s.T @ cov_mat_inv @ s + λ²||s-s_{prev}||^2 subject to the above
+            #    where λ is `spatial_regularization`
             #    the equations below are straightforward to derive, but a little tedious.
             #    Symmetry of cov_mat_inv is used.
             #    Watch out for the - on b! scipy.optimize.lsq_linear minimizes ||Ax-b||^2
@@ -136,28 +136,33 @@ def quantization_maker(
                 ]
             )
             # TODO: explore options (specifically solver options and tolerance)
-            sol, *_, success = lsq_linear(
-                np.vstack([A, np.identity(len(spatial_vars))]),
+            # noinspection PyTypeChecker
+            result: OptimizeResult = lsq_linear(
+                np.vstack([A, spatial_regularization * np.identity(len(spatial_vars))]),
                 np.concatenate(
-                    [b, quantized_state[second_block_start_idx:third_block_start_idx]]
+                    [
+                        b,
+                        spatial_regularization
+                        * quantized_state[second_block_start_idx:third_block_start_idx],
+                    ]
                 ),
                 bounds=variable_bounds,
             )
-            if not success:
+            solution: np.ndarray = result.x
+            if not result.success:
                 # fallback is to use the existing state (poss. fixed to be within bounds)
-                sol[:] = np.maximum(
-                    variable_minima, quantized_state[second_block_start_idx:third_block_start_idx]
+                solution[:] = np.maximum(
+                    variable_minima,
+                    quantized_state[second_block_start_idx:third_block_start_idx],
                 )
                 print("using fallback approx for spatial variables")
             # round integer fields to integers (fp integers, that is, not ints)
-            for idx, spatial_var in enumerate(
-                spatial_vars, start=second_block_start_idx
-            ):
+            for idx, spatial_var in enumerate(spatial_vars):
                 if np.issubdtype(getattr(model, spatial_var).dtype, np.integer):
-                    sol[idx] = np.rint(sol[idx])
+                    solution[idx] = np.rint(solution[idx])
 
             # replace in quantized state
-            quantized_state[second_block_start_idx:third_block_start_idx] = sol
+            quantized_state[second_block_start_idx:third_block_start_idx] = solution
 
             # # Compute the negative log likelihood of this quantization
 
@@ -196,6 +201,7 @@ quantizer = quantization_maker(
     quantization_similarity_loss_weight=1.0,
     typical_neighborhood_loss_weight=0.002,
     neighbor_similarity_loss_weight=1.0,
+    spatial_regularization=1.0,
     statistics_hdf5_file="local-nbhd-statistics.hdf5",
 )
 
@@ -212,14 +218,6 @@ def dither(
     state_vecs[:, :, : len(EpiType)] = epitype_one_hot_encoding(model.epithelium)
     for idx, spatial_var in enumerate(spatial_vars, start=len(EpiType)):
         state_vecs[:, :, idx] = getattr(model, spatial_var).astype(np.float64)
-
-    fig, axs = plt.subplots(4, 7, figsize=(3 * 4, 3 * 7))
-    axs = axs.reshape(-1)
-    # orig_cat_plot =
-    axs[0].imshow(np.argmax(state_vecs[:, :, : len(EpiType)], axis=2), vmin=0, vmax=4)
-    axs[-1].axis("off")
-    axs[-2].axis("off")
-    axs[-3].axis("off")
 
     # counts of epi cell types for the incoming model
     prev_epi_count = np.sum(state_vecs[:, :, : len(EpiType)], axis=(0, 1), dtype=int)
@@ -239,30 +237,6 @@ def dither(
     state_vecs[:, :, : len(EpiType)] += (
         (1 - np.sum(state_vecs[:, :, : len(EpiType)], axis=2)) / len(EpiType)
     )[:, :, np.newaxis]
-
-    new_cat_plot = axs[1].imshow(
-        np.argmax(state_vecs[:, :, : len(EpiType)], axis=2), vmin=0, vmax=4
-    )
-    state_plots = [
-        axs[idx + 2].imshow(state_vecs[:, :, idx], vmin=0, vmax=1.5) for idx in range(5)
-    ]
-    axs[0].set_title("Orig Category")
-    axs[1].set_title("Category")
-    axs[2].set_title("Empty")
-    axs[3].set_title("Healthy")
-    axs[4].set_title("Infected")
-    axs[5].set_title("Dead")
-    axs[6].set_title("Apoptosed")
-
-    var_plots = [
-        axs[idx + 7].imshow(state_vecs[:, :, idx + 5])
-        for idx in range(len(spatial_vars))
-    ]
-    for idx, spatial_var in enumerate(spatial_vars, start=7):
-        axs[idx].set_title(spatial_var)
-
-    fig.tight_layout()
-    input()
 
     newly_set_epi_counts = np.zeros(len(EpiType), dtype=np.int64)
 
@@ -290,21 +264,7 @@ def dither(
         error = state_vecs[row_idx, col_idx, :] - new_state
         state_vecs[row_idx, col_idx, :] = new_state
 
-        # print(cell_type, one_hot, error, state_vecs[row_idx,col_idx,:])
-        # print(np.sum(state_vecs, axis=(0, 1)))
-
-        new_cat_plot.set_data(np.argmax(state_vecs[:, :, : len(EpiType)], axis=2))
-        for idx in range(5):
-            state_plots[idx].set_data(state_vecs[:, :, idx])
-        for idx in range(len(spatial_vars)):
-            var_plots[idx].set_data(state_vecs[:, :, idx + 5])
-        plt.pause(0.01)
-        # time.sleep(0.1)
-
-        # floyd steinberg weights
-        # weights = (7 / 16, 3 / 16, 5 / 16, 1 / 16)
-        # even weights
-        # weights -> ( (r,c+1), (r+1,c-1), (r+1,c), (r+1,c+1))
+        # even weights -> ( (r,c+1), (r+1,c-1), (r+1,c), (r+1,c+1))
         if col_idx == model.geometry[1] - 1:
             if row_idx == model.geometry[0] - 1:
                 # last element, do not propagate error
@@ -377,124 +337,76 @@ def dither(
     return np.argmax(state_vecs, axis=2)
 
 
-# from modify_spatial import floyd_steinberg_dither
-#
-# epithelium = np.full((50, 50), EpiType.Healthy, dtype=EpiType)
-# X, Y = np.meshgrid(np.arange(50), np.arange(50))
-# epithelium[np.sqrt((X - 25) ** 2 + (Y - 25) ** 2) < 10] = EpiType.Infected
-# epithelium[np.sqrt((X - 25) ** 2 + (Y - 50) ** 2) < 10] = EpiType.Empty
-# empty_count, healthy_count, infected_count, dead_count, apoptosed_count = [
-#     np.sum(epithelium.astype(int) == tp) for tp in range(5)
-# ]
-# new_epithelium = floyd_steinberg_dither(
-#     epithelium, healthy_count, infected_count, apoptosed_count, dead_count, empty_count
-# )
+################################################################################
 
 
-def modify_model(
-    model: AnCockrellModel,
-    desired_state: np.ndarray,
-    *,
-    ignore_state_vars: bool = False,
-    variational_params,
-    state_vars,
-    state_var_indices,
-    verbose: bool = False,
-):
+def rescale_spatial_variables(desired_state, model, state_var_indices):
     """
-    Modify a model's microstate to fit a given macrostate
+    Rescale various spatial variables to their desired values
 
-    :param model: model instance (encodes microstate)
-    :param desired_state: desired macrostate for the model
-    :param ignore_state_vars: if True, only alter parameters, not state variables
-    :param verbose: if true, print diagnostic messages
+    :param desired_state:
+    :param model:
     :param state_var_indices:
-    :param state_vars:
-    :param variational_params:
-    :return: None
+    :return: nothing
     """
-    np.abs(desired_state, out=desired_state)  # in-place absolute value
-
-    for param_idx, param_name in enumerate(variational_params, start=len(state_vars)):
-        prev_value = getattr(model, param_name, None)
-        assert prev_value is not None
-        if isinstance(prev_value, int):
-            setattr(model, param_name, round(float(desired_state[param_idx])))
-        else:
-            setattr(model, param_name, desired_state[param_idx])
-
-    if ignore_state_vars:
-        return
-
     # it's worth pointing out that, because of the cleanup-below-a-threshold code,
     # these reset-by-scaling fields may not go to quite the right thing on the next
     # time step. I'm not seeing an easy fix/alternative here, so ¯\_(ツ)_/¯ ?
-
     # another problem is what to do when you have zero totals, punting here as well
-
     desired_t1ifn = desired_state[state_var_indices["total_T1IFN"]]
     if model.total_T1IFN > 0:
         model.T1IFN *= desired_t1ifn / model.total_T1IFN
     else:
         random_field = smooth_random_field(model.geometry)
         model.T1IFN[:] = random_field * desired_t1ifn / np.sum(random_field)
-
     desired_tnf = desired_state[state_var_indices["total_TNF"]]
     if model.total_TNF > 0:
         model.TNF *= desired_tnf / model.total_TNF
     else:
         random_field = smooth_random_field(model.geometry)
         model.TNF[:] = random_field * desired_tnf / np.sum(random_field)
-
     desired_ifn_g = desired_state[state_var_indices["total_IFNg"]]
     if model.total_IFNg > 0:
         model.IFNg *= desired_ifn_g / model.total_IFNg
     else:
         random_field = smooth_random_field(model.geometry)
         model.IFNg[:] = random_field * desired_ifn_g / np.sum(random_field)
-
     desired_il1 = desired_state[state_var_indices["total_IL1"]]
     if model.total_IL1 > 0:
         model.IL1 *= desired_il1 / model.total_IL1
     else:
         random_field = smooth_random_field(model.geometry)
         model.IL1[:] = random_field * desired_il1 / np.sum(random_field)
-
     desired_il6 = desired_state[state_var_indices["total_IL6"]]
     if model.total_IL6 > 0:
         model.IL6 *= desired_il6 / model.total_IL6
     else:
         random_field = smooth_random_field(model.geometry)
         model.IL6[:] = random_field * desired_il6 / np.sum(random_field)
-
     desired_il8 = desired_state[state_var_indices["total_IL8"]]
     if model.total_IL8 > 0:
         model.IL8 *= desired_il8 / model.total_IL8
     else:
         random_field = smooth_random_field(model.geometry)
         model.IL8[:] = random_field * desired_il8 / np.sum(random_field)
-
     desired_il10 = desired_state[state_var_indices["total_IL10"]]
     if model.total_IL10 > 0:
         model.IL10 *= desired_il10 / model.total_IL10
     else:
         random_field = smooth_random_field(model.geometry)
         model.IL10[:] = random_field * desired_il10 / np.sum(random_field)
-
     desired_il12 = desired_state[state_var_indices["total_IL12"]]
     if model.total_IL12 > 0:
         model.IL12 *= desired_il12 / model.total_IL12
     else:
         random_field = smooth_random_field(model.geometry)
         model.IL12[:] = random_field * desired_il12 / np.sum(random_field)
-
     desired_il18 = desired_state[state_var_indices["total_IL18"]]
     if model.total_IL18 > 0:
         model.IL18 *= desired_il18 / model.total_IL18
     else:
         random_field = smooth_random_field(model.geometry)
         model.IL18[:] = random_field * desired_il18 / np.sum(random_field)
-
     desired_total_extracellular_virus = desired_state[
         state_var_indices["total_extracellular_virus"]
     ]
@@ -505,82 +417,41 @@ def modify_model(
     else:
         model.infect(int(np.rint(desired_total_extracellular_virus)))
 
-    ################################################################################
 
-    fig, axs = plt.subplots(2)
-    dither_result = dither(
-        model, compute_desired_epi_counts(desired_state, model, state_var_indices)
+################################################################################
+
+
+def update_macrophage_count(desired_state, model, state_var_indices):
+    macro_delta = int(
+        np.rint(desired_state[state_var_indices["macro_count"]] - model.macro_count)
     )
-    axs[0].imshow(model.epithelium.astype(int), vmin=0, vmax=4)
-    axs[1].imshow(dither_result.astype(int), vmin=0, vmax=4)
-    input()
-
-    model.epithelium[:, :] = dither(
-        model, compute_desired_epi_counts(desired_state, model, state_var_indices)
-    )
-
-    # sanity check on updated epithelium TODO: other checks
-    for epitype in EpiType:
-        if epitype == EpiType.Infected:
-            model.epi_intracellular_virus[
-                model.epithelium == EpiType.Infected
-            ] = np.maximum(
-                1, model.epi_intracellular_virus[model.epithelium == EpiType.Infected]
+    if macro_delta > 0:
+        # need more macrophages, create them as in init in random locations
+        for _ in range(macro_delta):
+            model.create_macro(
+                pre_il1=0,
+                pre_il18=0,
+                inflammasome_primed=False,
+                inflammasome_active=False,
+                macro_activation_level=0,
+                pyroptosis_counter=0,
+                virus_eaten=0,
+                cells_eaten=0,
             )
-        else:
-            model.epi_intracellular_virus[model.epithelium == epitype] = 0
+    elif macro_delta < 0:
+        # need fewer macrophages, kill them randomly
+        num_to_kill = min(-macro_delta, model.num_macros)
+        macros_to_kill = np.random.choice(model.num_macros, num_to_kill, replace=False)
+        macro_idcs = np.where(model.macro_mask)[0]
+        model.macro_mask[macro_idcs[macros_to_kill]] = False
+        model.num_macros -= num_to_kill
+        assert model.num_macros == np.sum(model.macro_mask)
 
-    ################################################################################
 
-    desired_total_intracellular_virus = desired_state[
-        state_var_indices["total_intracellular_virus"]
-    ]
-    # TODO: how close does this get? do we have to deal with discretization error?
-    if model.total_intracellular_virus > 0:
-        model.epi_intracellular_virus[:] = np.rint(
-            model.epi_intracellular_virus[:]
-            * (desired_total_intracellular_virus / model.total_intracellular_virus),
-        ).astype(int)
-        # ensure that there is at least one virus in each infected cell
-        model.epi_intracellular_virus[
-            model.epithelium == EpiType.Infected
-        ] = np.maximum(
-            1, model.epi_intracellular_virus[model.epithelium == EpiType.Infected]
-        )
+################################################################################
 
-    model.apoptosis_eaten_counter = int(
-        np.rint(desired_state[state_var_indices["apoptosis_eaten_counter"]])
-    )  # no internal state here
 
-    dc_delta = int(
-        np.rint(desired_state[state_var_indices["dc_count"]] - model.dc_count)
-    )
-    if dc_delta > 0:
-        for _ in range(dc_delta):
-            model.create_dc()
-    elif dc_delta < 0:
-        # need fewer dcs, kill them randomly
-        num_to_kill = min(-dc_delta, model.num_dcs)
-        dcs_to_kill = np.random.choice(model.num_dcs, num_to_kill, replace=False)
-        dc_idcs = np.where(model.dc_mask)[0]
-        model.dc_mask[dc_idcs[dcs_to_kill]] = False
-        model.num_dcs -= num_to_kill
-        assert model.num_dcs == np.sum(model.dc_mask)
-
-    nk_delta = int(
-        np.rint(desired_state[state_var_indices["nk_count"]] - model.nk_count)
-    )
-    if nk_delta > 0:
-        model.create_nk(number=int(nk_delta))
-    elif nk_delta < 0:
-        # need fewer nks, kill them randomly
-        num_to_kill = min(-nk_delta, model.num_nks)
-        nks_to_kill = np.random.choice(model.num_nks, num_to_kill, replace=False)
-        nk_idcs = np.where(model.nk_mask)[0]
-        model.nk_mask[nk_idcs[nks_to_kill]] = False
-        model.num_nks -= num_to_kill
-        assert model.num_nks == np.sum(model.nk_mask)
-
+def update_pmn_count(desired_state, model, state_var_indices, verbose):
     pmn_delta = int(
         np.rint(desired_state[state_var_indices["pmn_count"]] - model.pmn_count)
     )
@@ -621,27 +492,136 @@ def modify_model(
         model.num_pmns -= num_to_kill
         assert model.num_pmns == np.sum(model.pmn_mask)
 
-    macro_delta = int(
-        np.rint(desired_state[state_var_indices["macro_count"]] - model.macro_count)
+
+################################################################################
+
+
+def update_nk_count(desired_state, model, state_var_indices):
+    nk_delta = int(
+        np.rint(desired_state[state_var_indices["nk_count"]] - model.nk_count)
     )
-    if macro_delta > 0:
-        # need more macrophages, create them as in init in random locations
-        for _ in range(macro_delta):
-            model.create_macro(
-                pre_il1=0,
-                pre_il18=0,
-                inflammasome_primed=False,
-                inflammasome_active=False,
-                macro_activation_level=0,
-                pyroptosis_counter=0,
-                virus_eaten=0,
-                cells_eaten=0,
+    if nk_delta > 0:
+        model.create_nk(number=int(nk_delta))
+    elif nk_delta < 0:
+        # need fewer nks, kill them randomly
+        num_to_kill = min(-nk_delta, model.num_nks)
+        nks_to_kill = np.random.choice(model.num_nks, num_to_kill, replace=False)
+        nk_idcs = np.where(model.nk_mask)[0]
+        model.nk_mask[nk_idcs[nks_to_kill]] = False
+        model.num_nks -= num_to_kill
+        assert model.num_nks == np.sum(model.nk_mask)
+
+
+################################################################################
+
+
+def update_dc_count(desired_state, model, state_var_indices):
+    dc_delta = int(
+        np.rint(desired_state[state_var_indices["dc_count"]] - model.dc_count)
+    )
+    if dc_delta > 0:
+        for _ in range(dc_delta):
+            model.create_dc()
+    elif dc_delta < 0:
+        # need fewer dcs, kill them randomly
+        num_to_kill = min(-dc_delta, model.num_dcs)
+        dcs_to_kill = np.random.choice(model.num_dcs, num_to_kill, replace=False)
+        dc_idcs = np.where(model.dc_mask)[0]
+        model.dc_mask[dc_idcs[dcs_to_kill]] = False
+        model.num_dcs -= num_to_kill
+        assert model.num_dcs == np.sum(model.dc_mask)
+
+
+################################################################################
+
+
+def modify_model(
+    model: AnCockrellModel,
+    desired_state: np.ndarray,
+    *,
+    ignore_state_vars: bool = False,
+    variational_params,
+    state_vars,
+    state_var_indices,
+    verbose: bool = False,
+):
+    """
+    Modify a model's microstate to fit a given macrostate
+
+    :param model: model instance (encodes microstate)
+    :param desired_state: desired macrostate for the model
+    :param ignore_state_vars: if True, only alter parameters, not state variables
+    :param verbose: if true, print diagnostic messages
+    :param state_var_indices:
+    :param state_vars:
+    :param variational_params:
+    :return: None
+    """
+    np.abs(desired_state, out=desired_state)  # in-place absolute value
+
+    for param_idx, param_name in enumerate(variational_params, start=len(state_vars)):
+        prev_value = getattr(model, param_name, None)
+        assert prev_value is not None
+        if isinstance(prev_value, int):
+            setattr(model, param_name, round(float(desired_state[param_idx])))
+        else:
+            setattr(model, param_name, desired_state[param_idx])
+
+    if ignore_state_vars:
+        return
+
+    ################################################################################
+
+    # rescaling both before and after the quantization in order to 1. give the
+    # quantizer better incoming information and 2. to improve accuracy of spatial
+    # variable estimates
+    rescale_spatial_variables(desired_state, model, state_var_indices)
+    model.epithelium[:, :] = dither(
+        model, compute_desired_epi_counts(desired_state, model, state_var_indices)
+    )
+    rescale_spatial_variables(desired_state, model, state_var_indices)
+
+    ################################################################################
+
+    # sanity check on updated epithelium TODO: other checks
+    for epitype in EpiType:
+        if epitype == EpiType.Infected:
+            model.epi_intracellular_virus[
+                model.epithelium == EpiType.Infected
+            ] = np.maximum(
+                1, model.epi_intracellular_virus[model.epithelium == EpiType.Infected]
             )
-    elif macro_delta < 0:
-        # need fewer macrophages, kill them randomly
-        num_to_kill = min(-macro_delta, model.num_macros)
-        macros_to_kill = np.random.choice(model.num_macros, num_to_kill, replace=False)
-        macro_idcs = np.where(model.macro_mask)[0]
-        model.macro_mask[macro_idcs[macros_to_kill]] = False
-        model.num_macros -= num_to_kill
-        assert model.num_macros == np.sum(model.macro_mask)
+        else:
+            model.epi_intracellular_virus[model.epithelium == epitype] = 0
+
+    ################################################################################
+
+    desired_total_intracellular_virus = desired_state[
+        state_var_indices["total_intracellular_virus"]
+    ]
+    if model.total_intracellular_virus > 0:
+        model.epi_intracellular_virus[:] = np.rint(
+            model.epi_intracellular_virus[:]
+            * (desired_total_intracellular_virus / model.total_intracellular_virus),
+        ).astype(int)
+        # ensure that there is at least one virus in each infected cell
+        model.epi_intracellular_virus[
+            model.epithelium == EpiType.Infected
+        ] = np.maximum(
+            1, model.epi_intracellular_virus[model.epithelium == EpiType.Infected]
+        )
+
+    model.apoptosis_eaten_counter = int(
+        np.rint(desired_state[state_var_indices["apoptosis_eaten_counter"]])
+    )  # no internal state here
+
+    update_dc_count(desired_state, model, state_var_indices)
+
+    update_nk_count(desired_state, model, state_var_indices)
+
+    update_pmn_count(desired_state, model, state_var_indices, verbose)
+
+    update_macrophage_count(desired_state, model, state_var_indices)
+
+
+################################################################################
