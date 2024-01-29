@@ -5,7 +5,7 @@ import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 from an_cockrell import AnCockrellModel, EndoType, EpiType, epitype_one_hot_encoding
-from scipy.optimize import Bounds, lsq_linear
+from scipy.optimize import Bounds, OptimizeResult, lsq_linear
 
 from util import compute_desired_epi_counts, smooth_random_field
 
@@ -90,12 +90,12 @@ def quantization_maker(
         min_state = sample[:block_dim].copy()
         min_neg_log_likelihood = float("inf")
         variable_minima = np.array(
-                [
-                    0.0 if spatial_var != "endothelial_activation" else -np.inf
-                    for spatial_var in spatial_vars
-                ],
-                dtype=np.float64,
-            )
+            [
+                0.0 if spatial_var != "endothelial_activation" else -np.inf
+                for spatial_var in spatial_vars
+            ],
+            dtype=np.float64,
+        )
         variable_bounds = Bounds(
             lb=variable_minima,
             ub=np.inf,
@@ -136,28 +136,29 @@ def quantization_maker(
                 ]
             )
             # TODO: explore options (specifically solver options and tolerance)
-            sol, *_, success = lsq_linear(
+            # noinspection PyTypeChecker
+            result: OptimizeResult = lsq_linear(
                 np.vstack([A, np.identity(len(spatial_vars))]),
                 np.concatenate(
                     [b, quantized_state[second_block_start_idx:third_block_start_idx]]
                 ),
                 bounds=variable_bounds,
             )
-            if not success:
+            solution = result.x
+            if not result.success:
                 # fallback is to use the existing state (poss. fixed to be within bounds)
-                sol[:] = np.maximum(
-                    variable_minima, quantized_state[second_block_start_idx:third_block_start_idx]
+                solution[:] = np.maximum(
+                    variable_minima,
+                    quantized_state[second_block_start_idx:third_block_start_idx],
                 )
                 print("using fallback approx for spatial variables")
             # round integer fields to integers (fp integers, that is, not ints)
-            for idx, spatial_var in enumerate(
-                spatial_vars, start=second_block_start_idx
-            ):
+            for idx, spatial_var in enumerate(spatial_vars):
                 if np.issubdtype(getattr(model, spatial_var).dtype, np.integer):
-                    sol[idx] = np.rint(sol[idx])
+                    solution[idx] = np.rint(solution[idx])
 
             # replace in quantized state
-            quantized_state[second_block_start_idx:third_block_start_idx] = sol
+            quantized_state[second_block_start_idx:third_block_start_idx] = solution
 
             # # Compute the negative log likelihood of this quantization
 
@@ -213,13 +214,20 @@ def dither(
     for idx, spatial_var in enumerate(spatial_vars, start=len(EpiType)):
         state_vecs[:, :, idx] = getattr(model, spatial_var).astype(np.float64)
 
-    fig, axs = plt.subplots(4, 7, figsize=(3 * 4, 3 * 7))
-    axs = axs.reshape(-1)
+    fig = plt.figure(constrained_layout=True, figsize=(10, 4))
+    gs = fig.add_gridspec(7, 5)
+    # categories
+    axs = [fig.add_subplot(gs[0, 0:2]), fig.add_subplot(gs[0, 3:5])]
+    # cell types
+    for plt_idx in range(5):
+        axs.append(fig.add_subplot(gs[1, plt_idx]))
+    # spatial vars
+    for plt_idx in range(len(spatial_vars)):
+        row_idx = 2+(plt_idx // 5)
+        col_idx = plt_idx % 5
+        axs.append(fig.add_subplot(gs[row_idx, col_idx]))
     # orig_cat_plot =
-    axs[0].imshow(np.argmax(state_vecs[:, :, : len(EpiType)], axis=2), vmin=0, vmax=4)
-    axs[-1].axis("off")
-    axs[-2].axis("off")
-    axs[-3].axis("off")
+    axs[0].imshow(np.argmax(state_vecs[:, :, : len(EpiType)], axis=2), vmin=0, vmax=max(EpiType))
 
     # counts of epi cell types for the incoming model
     prev_epi_count = np.sum(state_vecs[:, :, : len(EpiType)], axis=(0, 1), dtype=int)
@@ -244,7 +252,7 @@ def dither(
         np.argmax(state_vecs[:, :, : len(EpiType)], axis=2), vmin=0, vmax=4
     )
     state_plots = [
-        axs[idx + 2].imshow(state_vecs[:, :, idx], vmin=0, vmax=1.5) for idx in range(5)
+        axs[idx + 2].imshow(np.abs(state_vecs[:, :, idx]), vmin=0, vmax=1.5) for idx in range(5)
     ]
     axs[0].set_title("Orig Category")
     axs[1].set_title("Category")
@@ -262,7 +270,6 @@ def dither(
         axs[idx].set_title(spatial_var)
 
     fig.tight_layout()
-    input()
 
     newly_set_epi_counts = np.zeros(len(EpiType), dtype=np.int64)
 
@@ -279,7 +286,6 @@ def dither(
 
         # find the new type
         new_state = quantizer(model, state_vecs, available_epitypes, row_idx, col_idx)
-        print(new_state)
         cell_type: EpiType = EpiType(np.argmax(new_state[: len(EpiType)]))
 
         # update counts
@@ -290,16 +296,11 @@ def dither(
         error = state_vecs[row_idx, col_idx, :] - new_state
         state_vecs[row_idx, col_idx, :] = new_state
 
-        # print(cell_type, one_hot, error, state_vecs[row_idx,col_idx,:])
-        # print(np.sum(state_vecs, axis=(0, 1)))
-
         new_cat_plot.set_data(np.argmax(state_vecs[:, :, : len(EpiType)], axis=2))
         for idx in range(5):
             state_plots[idx].set_data(state_vecs[:, :, idx])
         for idx in range(len(spatial_vars)):
             var_plots[idx].set_data(state_vecs[:, :, idx + 5])
-        plt.pause(0.01)
-        # time.sleep(0.1)
 
         # floyd steinberg weights
         # weights = (7 / 16, 3 / 16, 5 / 16, 1 / 16)
