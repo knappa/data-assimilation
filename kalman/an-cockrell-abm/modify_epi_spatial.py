@@ -1,7 +1,6 @@
 from typing import Callable, Iterable
 
 import h5py
-import matplotlib.pyplot as plt
 import numpy as np
 from an_cockrell import AnCockrellModel, EndoType, EpiType, epitype_one_hot_encoding
 
@@ -376,14 +375,6 @@ def modify_model(
         model.infect(int(np.rint(desired_total_extracellular_virus)))
 
     ################################################################################
-
-    fig, axs = plt.subplots(2)
-    dither_result = dither(
-        model, compute_desired_epi_counts(desired_state, model, state_var_indices)
-    )
-    axs[0].imshow(model.epithelium.astype(int), vmin=0, vmax=4)
-    axs[1].imshow(dither_result.astype(int), vmin=0, vmax=4)
-    input()
 
     model.epithelium[:, :] = dither(
         model, compute_desired_epi_counts(desired_state, model, state_var_indices)

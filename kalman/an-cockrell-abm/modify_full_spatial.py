@@ -253,7 +253,6 @@ def dither(
 
         # find the new type
         new_state = quantizer(model, state_vecs, available_epitypes, row_idx, col_idx)
-        print(new_state)
         cell_type: EpiType = EpiType(np.argmax(new_state[: len(EpiType)]))
 
         # update counts
