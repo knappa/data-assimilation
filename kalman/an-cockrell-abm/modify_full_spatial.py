@@ -4,6 +4,7 @@ from typing import Callable, Iterable, Tuple
 import h5py
 import numpy as np
 from an_cockrell import AnCockrellModel, EndoType, EpiType, epitype_one_hot_encoding
+from matplotlib import animation
 from scipy.optimize import Bounds, OptimizeResult, lsq_linear
 
 from util import compute_desired_epi_counts, smooth_random_field
@@ -212,14 +213,14 @@ quantizer = quantization_maker(
 def dither(
     model: AnCockrellModel,
     new_epi_counts,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, animation.FuncAnimation]:
     # store spatial distribution of one-hot encoding for epithelial cell type
     state_vecs = np.zeros(shape=(*model.geometry, block_dim), dtype=np.float64)
     state_vecs[:, :, : len(EpiType)] = epitype_one_hot_encoding(model.epithelium)
     for idx, spatial_var in enumerate(spatial_vars, start=len(EpiType)):
         state_vecs[:, :, idx] = getattr(model, spatial_var).astype(np.float64)
 
-    fig = plt.figure(constrained_layout=True, figsize=(10, 4))
+    fig = plt.figure(constrained_layout=True, figsize=(10, 12))
     gs = fig.add_gridspec(7, 5)
     # categories
     axs = [fig.add_subplot(gs[0, 0:2]), fig.add_subplot(gs[0, 3:5])]
@@ -228,11 +229,13 @@ def dither(
         axs.append(fig.add_subplot(gs[1, plt_idx]))
     # spatial vars
     for plt_idx in range(len(spatial_vars)):
-        row_idx = 2+(plt_idx // 5)
+        row_idx = 2 + (plt_idx // 5)
         col_idx = plt_idx % 5
         axs.append(fig.add_subplot(gs[row_idx, col_idx]))
     # orig_cat_plot =
-    axs[0].imshow(np.argmax(state_vecs[:, :, : len(EpiType)], axis=2), vmin=0, vmax=max(EpiType))
+    axs[0].imshow(
+        np.argmax(state_vecs[:, :, : len(EpiType)], axis=2), vmin=0, vmax=max(EpiType)
+    )
 
     # counts of epi cell types for the incoming model
     prev_epi_count = np.sum(state_vecs[:, :, : len(EpiType)], axis=(0, 1), dtype=int)
@@ -257,7 +260,8 @@ def dither(
         np.argmax(state_vecs[:, :, : len(EpiType)], axis=2), vmin=0, vmax=4
     )
     state_plots = [
-        axs[idx + 2].imshow(np.abs(state_vecs[:, :, idx]), vmin=0, vmax=1.5) for idx in range(5)
+        axs[idx + 2].imshow(np.abs(state_vecs[:, :, idx]), vmin=0, vmax=1.5)
+        for idx in range(5)
     ]
     axs[0].set_title("Orig Category")
     axs[1].set_title("Category")
@@ -272,15 +276,20 @@ def dither(
         for idx in range(len(spatial_vars))
     ]
     for idx, spatial_var in enumerate(spatial_vars, start=7):
-        axs[idx].set_title(spatial_var)
+        axs[idx].set_title(
+            spatial_var.replace("endothelial_", "endothelial\n").replace("_", " "),
+            loc="center",
+            wrap=True,
+        )
 
-    fig.tight_layout()
+    num_frames = model.geometry[0] * model.geometry[1]
 
     newly_set_epi_counts = np.zeros(len(EpiType), dtype=np.int64)
 
-    for row_idx, col_idx in itertools.product(
-        range(model.geometry[0]), range(model.geometry[1])
-    ):
+    def update(frame_num: int):
+        modulus = model.geometry[1]
+        row_idx, col_idx = divmod(frame_num, modulus)
+
         # compute which epitypes are available for placement, where available means that we have not yet used
         # up all requested instances.
         available_epitypes = [
@@ -297,7 +306,6 @@ def dither(
         newly_set_epi_counts[cell_type] += 1
 
         # TODO: consistency checks for these cell types (internal virus, etc)
-
         error = state_vecs[row_idx, col_idx, :] - new_state
         state_vecs[row_idx, col_idx, :] = new_state
 
@@ -380,14 +388,16 @@ def dither(
             1 - np.sum(state_vecs[row_idx_plus, col_idx_plus, : len(EpiType)])
         ) / len(EpiType)
 
+    # noinspection PyTypeChecker
+    ani = animation.FuncAnimation(fig=fig, func=update, frames=num_frames, interval=30)
+
     return (
         np.argmax(state_vecs[:, :, : len(EpiType)], axis=2),
         state_vecs[:, :, len(EpiType) :],
+        ani,
     )
 
-
 ################################################################################
-
 
 def rescale_spatial_variables(desired_state, model, state_var_indices):
     """
@@ -478,6 +488,13 @@ def rescale_spatial_variables(desired_state, model, state_var_indices):
 
 ################################################################################
 
+    fig, axs = plt.subplots(2)
+    dither_result, ani = dither(
+        model, compute_desired_epi_counts(desired_state, model, state_var_indices)
+    )
+    axs[0].imshow(model.epithelium.astype(int), vmin=0, vmax=4)
+    axs[1].imshow(dither_result.astype(int), vmin=0, vmax=4)
+    input()
 
 def update_macrophage_count(desired_state, model, state_var_indices):
     macro_delta = int(
