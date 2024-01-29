@@ -153,7 +153,7 @@ def quantization_maker(
                 )
                 print("using fallback approx for spatial variables")
             # round integer fields to integers (fp integers, that is, not ints)
-            for idx, spatial_var in enumerate(spatial_vars):
+            for idx, spatial_var in enumerate(spatial_vars, start=second_block_start_idx):
                 if np.issubdtype(getattr(model, spatial_var).dtype, np.integer):
                     solution[idx] = np.rint(solution[idx])
 
