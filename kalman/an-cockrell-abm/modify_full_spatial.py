@@ -219,6 +219,21 @@ def dither(
     for idx, spatial_var in enumerate(spatial_vars, start=len(EpiType)):
         state_vecs[:, :, idx] = getattr(model, spatial_var).astype(np.float64)
 
+    fig = plt.figure(constrained_layout=True, figsize=(10, 4))
+    gs = fig.add_gridspec(7, 5)
+    # categories
+    axs = [fig.add_subplot(gs[0, 0:2]), fig.add_subplot(gs[0, 3:5])]
+    # cell types
+    for plt_idx in range(5):
+        axs.append(fig.add_subplot(gs[1, plt_idx]))
+    # spatial vars
+    for plt_idx in range(len(spatial_vars)):
+        row_idx = 2+(plt_idx // 5)
+        col_idx = plt_idx % 5
+        axs.append(fig.add_subplot(gs[row_idx, col_idx]))
+    # orig_cat_plot =
+    axs[0].imshow(np.argmax(state_vecs[:, :, : len(EpiType)], axis=2), vmin=0, vmax=max(EpiType))
+
     # counts of epi cell types for the incoming model
     prev_epi_count = np.sum(state_vecs[:, :, : len(EpiType)], axis=(0, 1), dtype=int)
 
@@ -237,6 +252,29 @@ def dither(
     state_vecs[:, :, : len(EpiType)] += (
         (1 - np.sum(state_vecs[:, :, : len(EpiType)], axis=2)) / len(EpiType)
     )[:, :, np.newaxis]
+
+    new_cat_plot = axs[1].imshow(
+        np.argmax(state_vecs[:, :, : len(EpiType)], axis=2), vmin=0, vmax=4
+    )
+    state_plots = [
+        axs[idx + 2].imshow(np.abs(state_vecs[:, :, idx]), vmin=0, vmax=1.5) for idx in range(5)
+    ]
+    axs[0].set_title("Orig Category")
+    axs[1].set_title("Category")
+    axs[2].set_title("Empty")
+    axs[3].set_title("Healthy")
+    axs[4].set_title("Infected")
+    axs[5].set_title("Dead")
+    axs[6].set_title("Apoptosed")
+
+    var_plots = [
+        axs[idx + 7].imshow(state_vecs[:, :, idx + 5])
+        for idx in range(len(spatial_vars))
+    ]
+    for idx, spatial_var in enumerate(spatial_vars, start=7):
+        axs[idx].set_title(spatial_var)
+
+    fig.tight_layout()
 
     newly_set_epi_counts = np.zeros(len(EpiType), dtype=np.int64)
 
@@ -263,7 +301,16 @@ def dither(
         error = state_vecs[row_idx, col_idx, :] - new_state
         state_vecs[row_idx, col_idx, :] = new_state
 
-        # even weights -> ( (r,c+1), (r+1,c-1), (r+1,c), (r+1,c+1))
+        new_cat_plot.set_data(np.argmax(state_vecs[:, :, : len(EpiType)], axis=2))
+        for idx in range(5):
+            state_plots[idx].set_data(state_vecs[:, :, idx])
+        for idx in range(len(spatial_vars)):
+            var_plots[idx].set_data(state_vecs[:, :, idx + 5])
+
+        # floyd steinberg weights
+        # weights = (7 / 16, 3 / 16, 5 / 16, 1 / 16)
+        # even weights
+        # weights -> ( (r,c+1), (r+1,c-1), (r+1,c), (r+1,c+1))
         if col_idx == model.geometry[1] - 1:
             if row_idx == model.geometry[0] - 1:
                 # last element, do not propagate error
