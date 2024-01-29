@@ -1,5 +1,4 @@
-from typing import Callable, Tuple
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Tuple
 
 import h5py
 import matplotlib.animation as animation
@@ -86,7 +85,7 @@ def quantization_maker(
         for row_delta, col_delta in moore_neighborhood:
             block_row = (row_idx + row_delta) % model.geometry[0]
             block_col = (col_idx + col_delta) % model.geometry[1]
-            neighbor_states[model.epithelium[block_row,block_col]] += 1
+            neighbor_states[model.epithelium[block_row, block_col]] += 1
 
         # evaluate the various quantizations
         min_type = -1
@@ -144,12 +143,14 @@ def dither(
     # state_vecs = np.zeros(shape=(*model.geometry, 5), dtype=np.float64)
     state_vecs = epitype_one_hot_encoding(model.epithelium)
 
-    fig, axs = plt.subplots(3, 3, figsize=(3 * 3, 3 * 3))
-    axs = axs.reshape(-1)
+    fig = plt.figure(constrained_layout=True, figsize=(10, 4))
+    gs = fig.add_gridspec(2, 5)
+    axs = [fig.add_subplot(gs[0, :2]), fig.add_subplot(gs[0, 3:5])]
+    for plt_idx in range(5):
+        axs.append(fig.add_subplot(gs[1, plt_idx]))
+
     # orig_cat_plot =
     axs[0].imshow(np.argmax(state_vecs, axis=2), vmin=0, vmax=4)
-    axs[-1].axis("off")
-    axs[-2].axis("off")
 
     # counts of epi cell types for the incoming model
     prev_epi_count = np.sum(state_vecs, axis=(0, 1), dtype=int)
@@ -179,149 +180,80 @@ def dither(
     axs[4].set_title("Infected")
     axs[5].set_title("Dead")
     axs[6].set_title("Apoptosed")
-    fig.tight_layout()
 
-    num_frames = (2 * model.geometry[0]) * (2 + model.geometry[1])
+    num_frames = model.geometry[0] * model.geometry[1]
 
     newly_set_epi_counts = np.zeros(len(EpiType), dtype=np.int64)
 
-    for row_idx in range(model.geometry[0]):
-        for col_idx in range(model.geometry[1]):
-            # compute which epitypes are available for placement, where available means that we have not yet used
-            # up all requested instances.
-            available_epitypes = [
-                epitype
-                for epitype in EpiType
-                if newly_set_epi_counts[epitype] < new_epi_counts[epitype]
-            ]
     def update(frame_num: int):
-        modulus = 2 + model.geometry[1]
+        modulus = model.geometry[1]
         double_row_idx, double_col_idx = divmod(frame_num, modulus)
 
         row_idx = double_row_idx % model.geometry[0]
         col_idx = double_col_idx % model.geometry[1]
 
-            # find the new type
-            cell_type: EpiType = quantizer(
-                model, state_vecs, available_epitypes, row_idx, col_idx
-            )
+        # compute which epitypes are available for placement, where available means that we have not yet used
+        # up all requested instances.
+        available_epitypes = [
+            epitype
+            for epitype in EpiType
+            if newly_set_epi_counts[epitype] < new_epi_counts[epitype]
+        ]
 
-            # update counts
-            newly_set_epi_counts[cell_type] += 1
-        # cell_type = np.argmax(state_vecs[row_idx, col_idx, :])
-        cell_type: EpiType = quantizer(model, state_vecs, row_idx, col_idx)
+        # find the new type
+        cell_type: EpiType = quantizer(
+            model, state_vecs, available_epitypes, row_idx, col_idx
+        )
 
-            # TODO: consistency checks for these cell types (internal virus, etc)
+        # update counts
+        newly_set_epi_counts[cell_type] += 1
 
-            one_hot = epitype_one_hot_encoding(cell_type)
-            error = state_vecs[row_idx, col_idx, :] - one_hot
-            state_vecs[row_idx, col_idx, :] = one_hot
         # TODO: consistency checks for these cell types (internal virus, etc)
         one_hot = epitype_one_hot_encoding(cell_type)
         error = state_vecs[row_idx, col_idx, :] - one_hot
         state_vecs[row_idx, col_idx, :] = one_hot
 
-        # assert (
-        #     state_vecs[row_idx, col_idx, 3] == 0.0
-        #     and state_vecs[row_idx, col_idx, 4] == 0.0
-        # ), f"{row_idx=}, {col_idx=}, {error=}, {one_hot=}, {state_vecs[row_idx,col_idx]=}"
-
-            # print(cell_type, one_hot, error, state_vecs[row_idx,col_idx,:])
-            # print(np.sum(state_vecs, axis=(0, 1)))
-
-            new_cat_plot.set_data(np.argmax(state_vecs, axis=2))
-            for idx in range(5):
-                state_plots[idx].set_data(state_vecs[:, :, idx])
-            plt.pause(0.01)
-            # time.sleep(0.1)
         new_cat_plot.set_data(np.argmax(state_vecs, axis=2))
         for idx in range(5):
             state_plots[idx].set_data(state_vecs[:, :, idx])
 
-        # time.sleep(0.1)
-
-            # floyd steinberg weights
-            # weights = (7 / 16, 3 / 16, 5 / 16, 1 / 16)
-            # even weights
-            # weights -> ( (r,c+1), (r+1,c-1), (r+1,c), (r+1,c+1))
-            if col_idx == model.geometry[1] - 1:
-                if row_idx == model.geometry[0] - 1:
-                    # last element, do not propagate error
-                    weights = (0, 0, 0, 0)
-                else:
-                    # right column, do not propagate error to right
-                    weights = (0, 1 / 2, 1 / 2, 0)
-            else:
-                if row_idx == model.geometry[0] - 1:
-                    # top row, do not propagate error down
-                    weights = (1, 0, 0, 0)
-                else:
-                    # interior
-                    weights = (1 / 4, 1 / 4, 1 / 4, 1 / 4)
         # floyd steinberg weights
-        weights = (7 / 16, 3 / 16, 5 / 16, 1 / 16)
-        # uniform weights
-        # weights = (1 / 4, 1 / 4, 1 / 4, 1 / 4)
+        # weights = (7 / 16, 3 / 16, 5 / 16, 1 / 16)
+        # even weights
+        # weights -> ( (r,c+1), (r+1,c-1), (r+1,c), (r+1,c+1))
+        if col_idx == model.geometry[1] - 1:
+            if row_idx == model.geometry[0] - 1:
+                # last element, do not propagate error
+                weights = (0, 0, 0, 0)
+            else:
+                # right column, do not propagate error to right
+                weights = (0, 1 / 2, 1 / 2, 0)
+        else:
+            if row_idx == model.geometry[0] - 1:
+                # top row, do not propagate error down
+                weights = (1, 0, 0, 0)
+            else:
+                # interior
+                weights = (1 / 4, 1 / 4, 1 / 4, 1 / 4)
 
-            num_rows = model.geometry[0]
-            num_cols = model.geometry[1]
-            row_idx_plus = (row_idx + 1) % num_rows
-            col_idx_plus = (col_idx + 1) % num_cols
-            col_idx_minus = (col_idx - 1) % num_cols
-
-            # (r,c+1)
-            # .*X
-            # xxx
-            state_vecs[row_idx, col_idx_plus, :] += error * weights[0]
-            # ensure it sums to 1
-            state_vecs[row_idx, col_idx_plus, :] += (
-                1 - np.sum(state_vecs[row_idx, col_idx_plus, :])
-            ) / len(EpiType)
-
-            # (r+1,c-1)
-            # .*x
-            # Xxx
-            state_vecs[
-                row_idx_plus,
-                col_idx_minus,
-                :,
-            ] += (
-                error * weights[1]
-            )
-            # ensure it sums to 1
-            state_vecs[row_idx_plus, col_idx_minus, :] += (
-                1 - np.sum(state_vecs[row_idx_plus, col_idx_minus, :])
-            ) / len(EpiType)
-
-            # (r+1,c)
-            # .*x
-            # xXx
-            state_vecs[row_idx_plus, col_idx, :] += error * weights[2]
-            # ensure it sums to 1
-            state_vecs[row_idx_plus, col_idx, :] += (
-                1 - np.sum(state_vecs[row_idx_plus, col_idx, :])
-            ) / len(EpiType)
-
-            # (r+1,c+1)
-            # .*x
-            # xxX
-            state_vecs[
-                row_idx_plus,
-                col_idx_plus,
-                :,
-            ] += (
-                error * weights[3]
-            )
-            # ensure it sums to 1
-            state_vecs[row_idx_plus, col_idx_plus, :] += (
-                1 - np.sum(state_vecs[row_idx_plus, col_idx_plus, :])
-            ) / len(EpiType)
         num_rows = model.geometry[0]
         num_cols = model.geometry[1]
         row_idx_plus = (row_idx + 1) % num_rows
         col_idx_plus = (col_idx + 1) % num_cols
         col_idx_minus = (col_idx - 1) % num_cols
+
+        # (r,c+1)
+        # .*X
+        # xxx
         state_vecs[row_idx, col_idx_plus, :] += error * weights[0]
+        # ensure it sums to 1
+        state_vecs[row_idx, col_idx_plus, :] += (
+            1 - np.sum(state_vecs[row_idx, col_idx_plus, :])
+        ) / len(EpiType)
+
+        # (r+1,c-1)
+        # .*x
+        # Xxx
         state_vecs[
             row_idx_plus,
             col_idx_minus,
@@ -329,7 +261,23 @@ def dither(
         ] += (
             error * weights[1]
         )
+        # ensure it sums to 1
+        state_vecs[row_idx_plus, col_idx_minus, :] += (
+            1 - np.sum(state_vecs[row_idx_plus, col_idx_minus, :])
+        ) / len(EpiType)
+
+        # (r+1,c)
+        # .*x
+        # xXx
         state_vecs[row_idx_plus, col_idx, :] += error * weights[2]
+        # ensure it sums to 1
+        state_vecs[row_idx_plus, col_idx, :] += (
+            1 - np.sum(state_vecs[row_idx_plus, col_idx, :])
+        ) / len(EpiType)
+
+        # (r+1,c+1)
+        # .*x
+        # xxX
         state_vecs[
             row_idx_plus,
             col_idx_plus,
@@ -337,7 +285,12 @@ def dither(
         ] += (
             error * weights[3]
         )
+        # ensure it sums to 1
+        state_vecs[row_idx_plus, col_idx_plus, :] += (
+            1 - np.sum(state_vecs[row_idx_plus, col_idx_plus, :])
+        ) / len(EpiType)
 
+    # noinspection PyTypeChecker
     ani = animation.FuncAnimation(fig=fig, func=update, frames=num_frames, interval=30)
 
     return np.argmax(state_vecs, axis=2), ani
@@ -458,6 +411,14 @@ def modify_model(
         model.infect(int(np.rint(desired_total_extracellular_virus)))
 
     ################################################################################
+
+    fig, axs = plt.subplots(2)
+    dither_result, animation = dither(
+        model, compute_desired_epi_counts(desired_state, model, state_var_indices)
+    )
+    axs[0].imshow(model.epithelium.astype(int), vmin=0, vmax=4)
+    axs[1].imshow(dither_result.astype(int), vmin=0, vmax=4)
+    input()
 
     model.epithelium[:, :] = dither(
         model, compute_desired_epi_counts(desired_state, model, state_var_indices)
