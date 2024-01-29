@@ -61,7 +61,10 @@ else:
     parser.add_argument("--graphs", help="make pdf graphs", action="store_true")
 
     parser.add_argument(
-        "--update-algorithm", type=str, choices=["simple", "spatial"], required=True
+        "--update-algorithm",
+        type=str,
+        choices=["simple", "spatial", "full-spatial"],
+        required=True,
     )
 
     args = parser.parse_args()
@@ -69,11 +72,13 @@ else:
 VERBOSE = False
 
 modification_algorithm = (
-    "spatial" if not hasattr(args, "update-algorithm") else args.update_algorithm
+    "full-spatial" if not hasattr(args, "update-algorithm") else args.update_algorithm
 )
 
 if modification_algorithm == "spatial":
     from modify_epi_spatial import modify_model
+elif modification_algorithm == "full-spatial":
+    from modify_full_spatial import modify_model
 else:
     from modify_simple import modify_model
 
