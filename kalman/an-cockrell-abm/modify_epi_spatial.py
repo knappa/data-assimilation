@@ -187,10 +187,7 @@ def dither(
 
     def update(frame_num: int):
         modulus = model.geometry[1]
-        double_row_idx, double_col_idx = divmod(frame_num, modulus)
-
-        row_idx = double_row_idx % model.geometry[0]
-        col_idx = double_col_idx % model.geometry[1]
+        row_idx, col_idx = divmod(frame_num, modulus)
 
         # compute which epitypes are available for placement, where available means that we have not yet used
         # up all requested instances.
