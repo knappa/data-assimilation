@@ -36,8 +36,8 @@ else:
             "T1IFN",
             "TNF",
             "IFNg",
-            "IL6",
             "IL1",
+            "IL6",
             "IL8",
             "IL10",
             "IL12",
@@ -75,10 +75,10 @@ modification_algorithm = (
     "full-spatial" if not hasattr(args, "update-algorithm") else args.update_algorithm
 )
 
-if modification_algorithm == "spatial":
-    from modify_epi_spatial import modify_model
-elif modification_algorithm == "full-spatial":
+if modification_algorithm == "full-spatial":
     from modify_full_spatial import modify_model
+elif modification_algorithm == "spatial":
+    from modify_epi_spatial import modify_model
 else:
     from modify_simple import modify_model
 
@@ -194,7 +194,12 @@ if GRAPHS:
     for idx, state_var_name in enumerate(state_vars):
         row, col = idx // state_var_graphs_cols, idx % state_var_graphs_cols
         axs[row, col].plot(vp_trajectory[:, idx])
-        axs[row, col].set_title(state_var_name)
+
+        axs[row, col].set_title(
+            state_var_name.replace("_", " "),
+            loc="center",
+            wrap=True,
+        )
     fig.tight_layout()
     fig.savefig(FILE_PREFIX + "virtual-patient.pdf")
     plt.close(fig)
@@ -217,13 +222,13 @@ def model_ensemble_from(means, covariances):
     for _ in range(ENSEMBLE_SIZE):
         model_param_dict = default_params.copy()
         sampled_params = np.abs(distribution.rvs())
-        for sample_component, param_name in zip(
+        for sample_component, parameter_name in zip(
             sampled_params,
             (init_only_params + variational_params),
         ):
-            model_param_dict[param_name] = (
+            model_param_dict[parameter_name] = (
                 round(sample_component)
-                if isinstance(default_params[param_name], int)
+                if isinstance(default_params[parameter_name], int)
                 else sample_component
             )
         # create model for virtual patient
@@ -339,7 +344,9 @@ while time < TIME_SPAN:
                 color="gray",
                 alpha=0.35,
             )
-            axs[row, col].set_title(state_var_name)
+            axs[row, col].set_title(
+                state_var_name.replace("_", " "), loc="center", wrap=True
+            )
             ymax = max(
                 1.1 * np.max(vp_trajectory[: (cycle + 1) * SAMPLE_INTERVAL + 1, idx]),
                 1.1 * np.max(mean_vec[: cycle * SAMPLE_INTERVAL + 1, idx]),
@@ -412,7 +419,9 @@ while time < TIME_SPAN:
                 color="gray",
                 alpha=0.35,
             )
-            axs[row, col].set_title(param_name)
+            axs[row, col].set_title(
+                param_name.replace("_", " "), loc="center", wrap=True
+            )
             ymax = 1.1 * max(
                 np.max(
                     vp_trajectory[
@@ -456,15 +465,15 @@ while time < TIME_SPAN:
 
     # rs encodes the uncertainty in the various observations
     rs: Dict[str, float] = {
-        # "total_T1IFN": 1.0,
-        # "total_TNF": 1.0,
-        # "total_IFNg": 1.0,
-        # "total_IL6": 1.0,
-        # "total_IL1": 1.0,
-        # "total_IL8": 1.0,
-        # "total_IL10": 1.0,
-        # "total_IL12": 1.0,
-        # "total_IL18": 1.0,
+        "total_T1IFN": 1.0,
+        "total_TNF": 1.0,
+        "total_IFNg": 1.0,
+        "total_IL6": 1.0,
+        "total_IL1": 1.0,
+        "total_IL8": 1.0,
+        "total_IL10": 1.0,
+        "total_IL12": 1.0,
+        "total_IL18": 1.0,
         "total_extracellular_virus": 1.0,
     }
     R = np.diag([rs[obs_name] for obs_name in OBSERVABLE_VAR_NAMES])
@@ -565,7 +574,7 @@ while time < TIME_SPAN:
                                 continue
 
             # now do the model modifications
-            for model_idx in range(ENSEMBLE_SIZE):
+            for model_idx in tqdm(range(ENSEMBLE_SIZE), desc="model modifications"):
                 modify_model(
                     model_ensemble[model_idx],
                     new_sample[model_to_sample_pairing[model_idx], :],
@@ -680,9 +689,9 @@ while time < TIME_SPAN:
 #             color="gray",
 #             alpha=0.35,
 #         )
-#         axs[idx].set_title(state_var_name)
+#         axs[idx].set_title(state_var_name.replace("_"," "), loc="center", wrap=True)
 #         axs[idx].legend()
-#     axs[3].set_title("surprisal")
+#     axs[3].set_title("surprisal", loc="center", wrap=True)
 #     axs[3].plot(surprisal_state, label="state surprisal")
 #     axs[3].plot(
 #         [0, TIME_SPAN + 1], [mean_surprisal_state, mean_surprisal_state], ":", color="black"
@@ -697,7 +706,7 @@ while time < TIME_SPAN:
 #     mean_vec=mean_vec,
 #     cov_matrix=cov_matrix,
 # )
-# with open(FILE_PREFIX + "meansurprisal.csv", "w") as file:
+# with open(FILE_PREFIX + "mean_surprisal.csv", "w") as file:
 #     csvwriter = csv.writer(file, delimiter=",", quoting=csv.QUOTE_MINIMAL)
 #     csvwriter.writerow(["full", "state", "param"])
 #     csvwriter.writerow([mean_surprisal_full, mean_surprisal_state, mean_surprisal_param])
