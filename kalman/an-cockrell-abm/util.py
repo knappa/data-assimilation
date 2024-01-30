@@ -6,36 +6,53 @@ from perlin_noise import PerlinNoise
 from consts import UNIFIED_STATE_SPACE_DIMENSION, state_vars, variational_params
 
 
-def compute_desired_epi_counts(desired_state, model, state_var_indices):
-    desired_epithelium = np.rint(
+def compute_desired_epi_counts(
+    desired_state, model: AnCockrellModel, state_var_indices
+):
+    num_grid_spaces = model.GRID_WIDTH * model.GRID_HEIGHT
+
+    # lots of cleanup here, to catch corner cases
+    desired_epithelium_float = np.clip(
         np.abs(
-            desired_state[
-                [
-                    state_var_indices["empty_epithelium_count"],
-                    state_var_indices["healthy_epithelium_count"],
-                    state_var_indices["infected_epithelium_count"],
-                    state_var_indices["dead_epithelium_count"],
-                    state_var_indices["apoptosed_epithelium_count"],
-                ]
-            ]
-        )
+            np.nan_to_num(
+                desired_state[
+                    [
+                        state_var_indices["empty_epithelium_count"],
+                        state_var_indices["healthy_epithelium_count"],
+                        state_var_indices["infected_epithelium_count"],
+                        state_var_indices["dead_epithelium_count"],
+                        state_var_indices["apoptosed_epithelium_count"],
+                    ]
+                ],
+                posinf=num_grid_spaces,
+                neginf=-num_grid_spaces,
+            )
+        ),
+        a_min=1e-6,
+        a_max=num_grid_spaces,
+    )
+    # Since these just samples from a normal distribution, the sampling might request more or less epithelium than
+    # there are grid spaces. We try to do our best to match the given distribution by scaling the quantities to the
+    # grid size. Further, the counts must be rounded to ints.
+    desired_epithelium = (
+        desired_epithelium_float * (num_grid_spaces / np.sum(desired_epithelium_float))
     ).astype(int)
 
-    # Since these just samples from a normal distribution, the sampling might request more or less epithelium than
-    # there are grid spaces. We try to do our best to match the given distribution
     desired_total_epithelium = np.sum(desired_epithelium)
-    num_grid_spaces = model.GRID_WIDTH * model.GRID_HEIGHT
-    if desired_total_epithelium != num_grid_spaces:
-        # try an integer-approximation of a proportional rescale
-        desired_epithelium = np.rint(
-            np.abs(
-                desired_epithelium
-                * (model.GRID_WIDTH * model.GRID_HEIGHT / desired_total_epithelium)
-            ),
-        ).astype(int)
 
-        desired_total_epithelium = np.sum(desired_epithelium)
-        # if that didn't go all the way (b/c e.g. rounding) add/knock off random individuals until it's ok
+    if desired_total_epithelium == 0:
+        # leave the simulation alone
+        desired_epithelium = np.array(
+            [
+                model.empty_epithelium_count,
+                model.healthy_epithelium_count,
+                model.infected_epithelium_count,
+                model.dead_epithelium_count,
+                model.apoptosed_epithelium_count,
+            ]
+        )
+    elif desired_total_epithelium != num_grid_spaces:
+        # if that didn't nail the value (b/c e.g. rounding) add/knock off random individuals until it's ok
         while desired_total_epithelium < num_grid_spaces:
             rand_idx = np.random.randint(len(desired_epithelium))
             desired_epithelium[rand_idx] += 1
