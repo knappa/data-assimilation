@@ -60,6 +60,9 @@ else:
     )
 
     # parameters for the measurement uncertainty (coeffs in the Kalman filter's R matrix)
+    parser.add_argument(
+        "--uncertainty-P_DAMPS", type=float, default=1.0, required=False
+    )
     parser.add_argument("--uncertainty-T1IFN", type=float, default=1.0, required=False)
     parser.add_argument("--uncertainty-TNF", type=float, default=1.0, required=False)
     parser.add_argument("--uncertainty-IFNg", type=float, default=1.0, required=False)
@@ -100,6 +103,9 @@ else:
 # not run on the command line. (See above for defaults if you are. Right now,
 # they are also 1.0.)
 rs: Dict[str, float] = {
+    "total_P_DAMPS": 1.0
+    if not hasattr(args, "uncertainty_P_DAMPS")
+    else args.uncertainty_P_DAMPS,
     "total_T1IFN": 1.0
     if not hasattr(args, "uncertainty_T1IFN")
     else args.uncertainty_T1IFN,
