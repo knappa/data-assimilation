@@ -67,6 +67,9 @@ def compute_desired_epi_counts(
     return desired_epithelium
 
 
+################################################################################
+
+
 def smooth_random_field(geometry):
     noise = PerlinNoise()
     return np.abs(
@@ -77,6 +80,9 @@ def smooth_random_field(geometry):
             ]
         )
     )
+
+
+################################################################################
 
 
 def model_macro_data(model: AnCockrellModel):
@@ -94,6 +100,9 @@ def model_macro_data(model: AnCockrellModel):
         macroscale_data[len(state_vars) + idx] = getattr(model, param)
 
     return macroscale_data
+
+
+################################################################################
 
 
 def cov_cleanup(cov_mat: np.ndarray) -> np.ndarray:
@@ -115,3 +124,106 @@ def cov_cleanup(cov_mat: np.ndarray) -> np.ndarray:
         @ eigenvectors.T
     )
     return np.nan_to_num((cov_mat + cov_mat.T) / 2.0)
+
+
+################################################################################
+
+
+def gale_shapely_matching(
+    *, new_sample: np.ndarray, macro_data: np.ndarray
+) -> np.ndarray:
+    """
+    Compute a pairing of distribution samples to existing macroscale data that minimizes the pairwise distance using
+    the Gale-Shapely algorithm. (i.e. stable marriage)
+
+    Usage::
+        model_to_sample_pairing = gale_shapely_matching(
+            new_sample=new_sample, macro_data=macro_data
+        )
+    Then the sample that pairs with the model of index `model_idx` is
+     `new_sample[model_to_sample_pairing[model_idx], :]`.
+
+    :param new_sample: (N, UNIFIED_STATE_SPACE_DIMENSION) numpy array of samples from the new distribution
+    :param macro_data: (N, UNIFIED_STATE_SPACE_DIMENSION) numpy array of samples from the existing distribution
+    :return: matching array of model to sample pairings
+    """
+    ensemble_size = new_sample.shape[0]
+    # fill out preference lists for the models
+    prefs = np.zeros((ensemble_size, ensemble_size), dtype=np.int64)
+    for idx in range(ensemble_size):
+        # noinspection PyUnboundLocalVariable
+        dists = np.linalg.norm(new_sample - macro_data[idx], axis=1)
+        prefs[idx, :] = np.argsort(dists)
+
+    # arrays to record pairings
+    model_to_sample_pairing = np.full(ensemble_size, -1, dtype=np.int64)
+    sample_to_model_pairing = np.full(ensemble_size, -1, dtype=np.int64)
+
+    all_paired = False
+    while not all_paired:
+        all_paired = True
+        for model_idx in range(ensemble_size):
+            if model_to_sample_pairing[model_idx] != -1:
+                # skip already paired models
+                continue
+            # found an unpaired model, find the first thing not yet
+            # checked on its preference list
+            min_pref_idx = np.argmax(prefs[model_idx, :] >= 0)
+            for pref_idx in range(min_pref_idx, ensemble_size):
+                possible_sample_pair = prefs[model_idx, pref_idx]
+                competitor_model_idx = sample_to_model_pairing[possible_sample_pair]
+                if competitor_model_idx == -1:
+                    # if the sample is unpaired, pair the two
+                    sample_to_model_pairing[possible_sample_pair] = model_idx
+                    model_to_sample_pairing[model_idx] = possible_sample_pair
+                    # erase this possibility for future pairings
+                    prefs[model_idx, pref_idx] = -1
+                    break  # stop looking now
+                else:
+                    # compare preferences
+                    established_pair_dist = np.linalg.norm(
+                        macro_data[competitor_model_idx, :]
+                        - new_sample[possible_sample_pair, :]
+                    )
+                    proposed_pair_dist = np.linalg.norm(
+                        macro_data[model_idx, :] - new_sample[possible_sample_pair, :]
+                    )
+                    if proposed_pair_dist < established_pair_dist:
+                        model_to_sample_pairing[
+                            competitor_model_idx
+                        ] = -1  # free the competitor
+                        all_paired = False
+                        # make new pair
+                        sample_to_model_pairing[possible_sample_pair] = model_idx
+                        model_to_sample_pairing[model_idx] = possible_sample_pair
+                        # erase this possibility for future pairings
+                        prefs[model_idx, pref_idx] = -1
+                        break  # stop looking now
+                    else:
+                        prefs[model_idx, pref_idx] = -1  # this one didn't work
+                        continue
+
+    return model_to_sample_pairing
+
+
+################################################################################
+
+
+def fix_title(s: str, *, break_len=14):
+    """
+    Fix variable name titles.
+
+    :param s: a title with _'s and maybe too long
+    :param break_len: where to look for line breaks
+    :return: a title without _'s and with \n's in reasonable places
+    """
+    s = s.replace("_", " ")
+    if len(s) > 1.5 * break_len:
+        idx = s[break_len:].find(" ")
+        if idx >= 0:
+            idx += break_len
+        else:
+            idx = s.find(" ")
+        if idx != -1:
+            s = s[:break_len] + "\n" + s[break_len + 1 :]
+    return s

@@ -212,3 +212,5 @@ variational_params_indices = {s: i + len(state_vars) for i, s in enumerate(state
 
 
 UNIFIED_STATE_SPACE_DIMENSION = len(state_vars) + len(variational_params)
+
+assert all(param in default_params for param in variational_params)

@@ -17,7 +17,7 @@ from consts import (
     state_vars,
     variational_params,
 )
-from util import cov_cleanup, model_macro_data
+from util import cov_cleanup, fix_title, gale_shapely_matching, model_macro_data
 
 ################################################################################
 
@@ -49,15 +49,6 @@ else:
         help="which things to measure (required)",
     )
 
-    parser.add_argument(
-        "--matchmaker",
-        help="try to match resampled macrostates with microstate "
-        "models to minimize change magnitude",
-        type=str,
-        choices=["yes", "no"],
-        required=True,
-    )
-
     parser.add_argument("--graphs", help="make pdf graphs", action="store_true")
 
     parser.add_argument(
@@ -67,12 +58,34 @@ else:
         required=True,
     )
 
+    # parameters for the measurement uncertainty (coeffs in the Kalman filter's R matrix)
+    parser.add_argument("--uncertainty-T1IFN", type=float, default=1.0, required=False)
+    parser.add_argument("--uncertainty-TNF", type=float, default=1.0, required=False)
+    parser.add_argument("--uncertainty-IFNg", type=float, default=1.0, required=False)
+    parser.add_argument("--uncertainty-IL6", type=float, default=1.0, required=False)
+    parser.add_argument("--uncertainty-IL1", type=float, default=1.0, required=False)
+    parser.add_argument("--uncertainty-IL8", type=float, default=1.0, required=False)
+    parser.add_argument("--uncertainty-IL10", type=float, default=1.0, required=False)
+    parser.add_argument("--uncertainty-IL12", type=float, default=1.0, required=False)
+    parser.add_argument("--uncertainty-IL18", type=float, default=1.0, required=False)
+    parser.add_argument(
+        "--uncertainty-extracellular_virus", type=float, default=1.0, required=False
+    )
+
+    parser.add_argument(
+        "--verbose", help="print extra diagnostic messages", action="store_true"
+    )
+
     args = parser.parse_args()
 
-VERBOSE = False
+################################################################################
+# command line option interpretation / backfilling those options when you,
+# for example, paste the code into ipython
+
+VERBOSE = False if not hasattr(args, "verbose") else args.verbose
 
 modification_algorithm = (
-    "full-spatial" if not hasattr(args, "update-algorithm") else args.update_algorithm
+    "spatial" if not hasattr(args, "update_algorithm") else args.update_algorithm
 )
 
 if modification_algorithm == "full-spatial":
@@ -82,9 +95,60 @@ elif modification_algorithm == "spatial":
 else:
     from modify_simple import modify_model
 
+# rs encodes the uncertainty in the various observations. Defaults are 1.0 if
+# not run on the command line. (See above for defaults if you are. Right now,
+# they are also 1.0.)
+rs: Dict[str, float] = {
+    "total_T1IFN": 1.0
+    if not hasattr(args, "uncertainty_T1IFN")
+    else args.uncertainty_T1IFN,
+    "total_TNF": 1.0 if not hasattr(args, "uncertainty_TNF") else args.uncertainty_TNF,
+    "total_IFNg": 1.0
+    if not hasattr(args, "uncertainty_IFNg")
+    else args.uncertainty_IFNg,
+    "total_IL6": 1.0 if not hasattr(args, "uncertainty_IL6") else args.uncertainty_IL6,
+    "total_IL1": 1.0 if not hasattr(args, "uncertainty_IL1") else args.uncertainty_IL1,
+    "total_IL8": 1.0 if not hasattr(args, "uncertainty_IL8") else args.uncertainty_IL8,
+    "total_IL10": 1.0
+    if not hasattr(args, "uncertainty_IL10")
+    else args.uncertainty_IL10,
+    "total_IL12": 1.0
+    if not hasattr(args, "uncertainty_IL12")
+    else args.uncertainty_IL12,
+    "total_IL18": 1.0
+    if not hasattr(args, "uncertainty_IL18")
+    else args.uncertainty_IL18,
+    "total_extracellular_virus": 1.0
+    if not hasattr(args, "uncertainty_extracellular_virus")
+    else args.uncertainty_extracellular_virus,
+}
+
+
+ENSEMBLE_SIZE = (
+    (UNIFIED_STATE_SPACE_DIMENSION + 1) * UNIFIED_STATE_SPACE_DIMENSION // 2
+)  # max(50, (UNIFIED_STATE_SPACE_DIMENSION + 1))
+OBSERVABLES = (
+    ["extracellular_virus"] if not hasattr(args, "measurements") else args.measurements
+)
+OBSERVABLE_VAR_NAMES = ["total_" + name for name in OBSERVABLES]
+
+FILE_PREFIX = "" if not hasattr(args, "prefix") else args.prefix + "-"
+
+GRAPHS = True if not hasattr(args, "graphs") else bool(args.graphs)
+
 ################################################################################
 # constants
 
+# have the models' parameters do a random walk over time (should help
+# with covariance starvation)
+PARAMETER_RANDOM_WALK = True
+
+TIME_SPAN = 2016
+SAMPLE_INTERVAL = 48  # how often to make measurements
+
+
+################################################################################
+# graph layout computations
 
 # layout for graphing state variables.
 # Attempts to be mostly square, with possibly more rows than columns
@@ -103,34 +167,6 @@ variational_params_graphs_figsize = (
     1.8 * variational_params_graphs_cols,
 )
 
-assert all(param in default_params for param in variational_params)
-
-TIME_SPAN = 2016
-SAMPLE_INTERVAL = 48  # how often to make measurements
-
-ENSEMBLE_SIZE = (
-    (UNIFIED_STATE_SPACE_DIMENSION + 1) * UNIFIED_STATE_SPACE_DIMENSION // 2
-)  # max(50, (UNIFIED_STATE_SPACE_DIMENSION + 1))
-OBSERVABLES = (
-    ["extracellular_virus"] if not hasattr(args, "measurements") else args.measurements
-)
-OBSERVABLE_VAR_NAMES = ["total_" + name for name in OBSERVABLES]
-
-RESAMPLE_MODELS = False
-
-# if we are altering the models (as opposed to resampling) try to match the
-# models to minimize the changes necessary.
-MODEL_MATCHMAKER = (
-    True if not hasattr(args, "matchmaker") else (args.matchmaker == "yes")
-)
-
-# have the models' parameters do a random walk over time (should help
-# with covariance starvation)
-PARAMETER_RANDOM_WALK = True
-
-FILE_PREFIX = "" if not hasattr(args, "prefix") else args.prefix + "-"
-
-GRAPHS = True if not hasattr(args, "graphs") else bool(args.graphs)
 
 ################################################################################
 # statistical parameters
@@ -196,10 +232,13 @@ if GRAPHS:
         axs[row, col].plot(vp_trajectory[:, idx])
 
         axs[row, col].set_title(
-            state_var_name.replace("_", " "),
+            fix_title(state_var_name),
             loc="center",
             wrap=True,
         )
+    for idx in range(len(state_vars), state_var_graphs_rows * state_var_graphs_cols):
+        row, col = divmod(idx, state_var_graphs_cols)
+        axs[row, col].set_axis_off()
     fig.tight_layout()
     fig.savefig(FILE_PREFIX + "virtual-patient.pdf")
     plt.close(fig)
@@ -222,6 +261,7 @@ def model_ensemble_from(means, covariances):
     for _ in range(ENSEMBLE_SIZE):
         model_param_dict = default_params.copy()
         sampled_params = np.abs(distribution.rvs())
+        # noinspection PyShadowingNames
         for sample_component, parameter_name in zip(
             sampled_params,
             (init_only_params + variational_params),
@@ -236,9 +276,6 @@ def model_ensemble_from(means, covariances):
         mdl_ensemble.append(model)
 
     return mdl_ensemble
-
-
-################################################################################
 
 
 ################################################################################
@@ -258,17 +295,9 @@ cov_matrix = np.full(
 
 # collect initial statistics
 time = 0
-initial_macro_data = np.array([model_macro_data(model) for model in model_ensemble])
-mean_vec[time, :] = np.mean(initial_macro_data, axis=0)
-cov_matrix[time, :, :] = np.cov(initial_macro_data, rowvar=False)
-# with warnings.catch_warnings(action="ignore", category=UserWarning):
-#     cov_obj = covariance.LedoitWolf().fit(initial_macro_data)
-#     # noinspection PyUnresolvedReferences
-#     mean_vec[time, :] = cov_obj.location_
-#     # noinspection PyUnresolvedReferences
-#     cov_matrix[time, :, :], _ = covariance.graphical_lasso(cov_obj.covariance_, 1.0)
-#     # # noinspection PyUnresolvedReferences
-#     # cov_matrix[time,:,:] = cov_obj.covariance_
+macro_data = np.array([model_macro_data(model) for model in model_ensemble])
+mean_vec[time, :] = np.mean(macro_data, axis=0)
+cov_matrix[time, :, :] = np.cov(macro_data, rowvar=False)
 
 cycle = 0
 while time < TIME_SPAN:
@@ -300,14 +329,6 @@ while time < TIME_SPAN:
         macro_data = np.array([model_macro_data(model) for model in model_ensemble])
         mean_vec[time, :] = np.mean(macro_data, axis=0)
         cov_matrix[time, :, :] = np.cov(macro_data, rowvar=False)
-        # with warnings.catch_warnings(action="ignore", category=UserWarning):
-        #     cov_obj = covariance.LedoitWolf().fit(macro_data)
-        #     # noinspection PyUnresolvedReferences
-        #     mean_vec[time, :] = cov_obj.location_
-        #     # noinspection PyUnresolvedReferences
-        #     cov_matrix[time, :, :], _ = covariance.graphical_lasso(cov_obj.covariance_, 1.0)
-        #     # # noinspection PyUnresolvedReferences
-        #     # cov_matrix[time,:,:] = cov_obj.covariance_
 
     ################################################################################
     # plot state variables
@@ -344,9 +365,7 @@ while time < TIME_SPAN:
                 color="gray",
                 alpha=0.35,
             )
-            axs[row, col].set_title(
-                state_var_name.replace("_", " "), loc="center", wrap=True
-            )
+            axs[row, col].set_title(fix_title(state_var_name), loc="center", wrap=True)
             ymax = max(
                 1.1 * np.max(vp_trajectory[: (cycle + 1) * SAMPLE_INTERVAL + 1, idx]),
                 1.1 * np.max(mean_vec[: cycle * SAMPLE_INTERVAL + 1, idx]),
@@ -354,7 +373,13 @@ while time < TIME_SPAN:
             if ymax == 0:
                 ymax = 1.0
             axs[row, col].set_ylim([0, ymax])
-            # axs[row, col].legend()
+        # remove axes on unused graphs
+        for idx in range(
+            len(state_vars),
+            state_var_graphs_rows * state_var_graphs_cols,
+        ):
+            row, col = divmod(idx, state_var_graphs_cols)
+            axs[row, col].set_axis_off()
         handles, labels = axs[0, 0].get_legend_handles_labels()
         fig.legend(handles, labels, loc="outside lower center")
         fig.tight_layout()
@@ -416,9 +441,7 @@ while time < TIME_SPAN:
                 color="gray",
                 alpha=0.35,
             )
-            axs[row, col].set_title(
-                param_name.replace("_", " "), loc="center", wrap=True
-            )
+            axs[row, col].set_title(fix_title(param_name), loc="center", wrap=True)
             ymax = 1.1 * max(
                 np.max(
                     vp_trajectory[
@@ -427,14 +450,6 @@ while time < TIME_SPAN:
                 ),
                 np.max(mean_vec[: cycle * SAMPLE_INTERVAL + 1, len(state_vars) + idx]),
             )
-            # most_of_variation = np.percentile((mean_vec[: cycle * SAMPLE_INTERVAL + 1, len(state_vars) + idx]
-            # + np.sqrt(
-            #     cov_matrix[
-            #     : cycle * SAMPLE_INTERVAL + 1,
-            #     len(state_vars) + idx,
-            #     len(state_vars) + idx,
-            #     ]
-            # )),0.9)
             if ymax == 0:
                 ymax = 1.0
             axs[row, col].set_ylim([0, ymax])
@@ -444,7 +459,7 @@ while time < TIME_SPAN:
             variational_params_graphs_rows * variational_params_graphs_cols,
         ):
             row, col = divmod(idx, variational_params_graphs_cols)
-            axs[row, col].axis("off")
+            axs[row, col].set_axis_off()
 
         handles, labels = axs[0, 0].get_legend_handles_labels()
         fig.legend(handles, labels, loc="outside lower center")
@@ -457,19 +472,6 @@ while time < TIME_SPAN:
 
     num_observables = len(OBSERVABLE_VAR_NAMES)
 
-    # rs encodes the uncertainty in the various observations
-    rs: Dict[str, float] = {
-        "total_T1IFN": 1.0,
-        "total_TNF": 1.0,
-        "total_IFNg": 1.0,
-        "total_IL6": 1.0,
-        "total_IL1": 1.0,
-        "total_IL8": 1.0,
-        "total_IL10": 1.0,
-        "total_IL12": 1.0,
-        "total_IL18": 1.0,
-        "total_extracellular_virus": 1.0,
-    }
     R = np.diag([rs[obs_name] for obs_name in OBSERVABLE_VAR_NAMES])
 
     H = np.zeros((num_observables, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
@@ -493,214 +495,32 @@ while time < TIME_SPAN:
 
     cov_matrix[time, :, :] = cov_cleanup(cov_matrix[time, :, :])
 
-    # recreate ensemble
-    if RESAMPLE_MODELS:
-        # create an entirely new set of model instances sampled from KF-learned distribution
-        model_ensemble = model_ensemble_from(mean_vec[time, :], cov_matrix[time, :, :])
-    else:
-        dist = multivariate_normal(
-            mean=mean_vec[time, :], cov=cov_matrix[time, :, :], allow_singular=True
+    ################################################################################
+    # recreate ensemble with new distribution
+
+    new_sample = multivariate_normal(
+        mean=mean_vec[time, :], cov=cov_matrix[time, :, :], allow_singular=True
+    ).rvs(size=ENSEMBLE_SIZE)
+
+    # Gale-Shapely matching algorithm to try and pair up the models and these new samples
+    model_to_sample_pairing = gale_shapely_matching(
+        new_sample=new_sample, macro_data=macro_data
+    )
+
+    # now do the model modifications
+    for model_idx in tqdm(range(ENSEMBLE_SIZE), desc="model modifications"):
+        modify_model(
+            model_ensemble[model_idx],
+            new_sample[model_to_sample_pairing[model_idx], :],
+            verbose=VERBOSE,
+            state_var_indices=state_var_indices,
+            state_vars=state_vars,
+            variational_params=variational_params,
         )
-        if MODEL_MATCHMAKER:
-            new_sample = dist.rvs(size=ENSEMBLE_SIZE)
-            # Gale-Shapely matching algorithm to try and pair up the models and these new samples
 
-            # fill out preference lists for the models
-            prefs = np.zeros((ENSEMBLE_SIZE, ENSEMBLE_SIZE), dtype=np.int64)
-            for idx in range(ENSEMBLE_SIZE):
-                # noinspection PyUnboundLocalVariable
-                dists = np.linalg.norm(new_sample - macro_data[idx], axis=1)
-                prefs[idx, :] = np.argsort(dists)
-
-            # arrays to record pairings
-            model_to_sample_pairing = np.full(ENSEMBLE_SIZE, -1, dtype=np.int64)
-            sample_to_model_pairing = np.full(ENSEMBLE_SIZE, -1, dtype=np.int64)
-
-            all_paired = False
-            while not all_paired:
-                all_paired = True
-                for model_idx in range(ENSEMBLE_SIZE):
-                    if model_to_sample_pairing[model_idx] != -1:
-                        # skip already paired models
-                        continue
-                    # found an unpaired model, find the first thing not yet
-                    # checked on its preference list
-                    min_pref_idx = np.argmax(prefs[model_idx, :] >= 0)
-                    for pref_idx in range(min_pref_idx, ENSEMBLE_SIZE):
-                        possible_sample_pair = prefs[model_idx, pref_idx]
-                        competitor_model_idx = sample_to_model_pairing[
-                            possible_sample_pair
-                        ]
-                        if competitor_model_idx == -1:
-                            # if the sample is unpaired, pair the two
-                            sample_to_model_pairing[possible_sample_pair] = model_idx
-                            model_to_sample_pairing[model_idx] = possible_sample_pair
-                            # erase this possibility for future pairings
-                            prefs[model_idx, pref_idx] = -1
-                            break  # stop looking now
-                        else:
-                            # compare preferences
-                            established_pair_dist = np.linalg.norm(
-                                macro_data[competitor_model_idx, :]
-                                - new_sample[possible_sample_pair, :]
-                            )
-                            proposed_pair_dist = np.linalg.norm(
-                                macro_data[model_idx, :]
-                                - new_sample[possible_sample_pair, :]
-                            )
-                            if proposed_pair_dist < established_pair_dist:
-                                model_to_sample_pairing[
-                                    competitor_model_idx
-                                ] = -1  # free the competitor
-                                all_paired = False
-                                # make new pair
-                                sample_to_model_pairing[
-                                    possible_sample_pair
-                                ] = model_idx
-                                model_to_sample_pairing[
-                                    model_idx
-                                ] = possible_sample_pair
-                                # erase this possibility for future pairings
-                                prefs[model_idx, pref_idx] = -1
-                                break  # stop looking now
-                            else:
-                                prefs[model_idx, pref_idx] = -1  # this one didn't work
-                                continue
-
-            # now do the model modifications
-            for model_idx in tqdm(range(ENSEMBLE_SIZE), desc="model modifications"):
-                modify_model(
-                    model_ensemble[model_idx],
-                    new_sample[model_to_sample_pairing[model_idx], :],
-                    verbose=VERBOSE,
-                    state_var_indices=state_var_indices,
-                    state_vars=state_vars,
-                    variational_params=variational_params,
-                )
-        else:
-            # sample from KF-learned dist and modify existing models to fit
-            for model in model_ensemble:
-                state = dist.rvs()
-                modify_model(
-                    model,
-                    state,
-                    verbose=VERBOSE,
-                    state_var_indices=state_var_indices,
-                    state_vars=state_vars,
-                    variational_params=variational_params,
-                )
-#
-# ################################################################################
-#
-# vp_full_trajectory = np.array(
-#     (
-#         vp_wolf_counts,
-#         vp_sheep_counts,
-#         vp_grass_counts,
-#         [vp_wolf_gain_from_food] * (TIME_SPAN + 1),
-#         [vp_sheep_gain_from_food] * (TIME_SPAN + 1),
-#         [vp_wolf_reproduce] * (TIME_SPAN + 1),
-#         [vp_sheep_reproduce] * (TIME_SPAN + 1),
-#         [vp_grass_regrowth_time] * (TIME_SPAN + 1),
-#     )
-# ).T
-#
-# delta_full = mean_vec - vp_full_trajectory
-# surprisal_full = np.einsum("ij,ij->i", delta_full, np.linalg.solve(cov_matrix, delta_full))
-# mean_surprisal_full = np.mean(surprisal_full)
-#
-# vp_state_trajectory = np.array(
-#     (
-#         vp_wolf_counts,
-#         vp_sheep_counts,
-#         vp_grass_counts,
-#     )
-# ).T
-# delta_state = mean_vec[:, :3] - vp_state_trajectory
-# surprisal_state = np.einsum(
-#     "ij,ij->i", delta_state, np.linalg.solve(cov_matrix[:, :3, :3], delta_state)
-# )
-# mean_surprisal_state = np.mean(surprisal_state)
-#
-# vp_param_trajectory = np.array(
-#     (
-#         [vp_wolf_gain_from_food] * (TIME_SPAN + 1),
-#         [vp_sheep_gain_from_food] * (TIME_SPAN + 1),
-#         [vp_wolf_reproduce] * (TIME_SPAN + 1),
-#         [vp_sheep_reproduce] * (TIME_SPAN + 1),
-#         [vp_grass_regrowth_time] * (TIME_SPAN + 1),
-#     )
-# ).T
-# delta_param = mean_vec[:, 3:] - vp_param_trajectory
-# surprisal_param = np.einsum(
-#     "ij,ij->i", delta_param, np.linalg.solve(cov_matrix[:, 3:, 3:], delta_param)
-# )
-# mean_surprisal_param = np.mean(surprisal_param)
-#
-# if GRAPHS:
-#     plt.plot(surprisal_full, label="full surprisal")
-#     plt.plot(surprisal_state, label="state surprisal")
-#     plt.plot(surprisal_param, label="param surprisal")
-#     plt.legend()
-#     plt.tight_layout()
-#     plt.savefig(FILE_PREFIX + f"surprisal.pdf")
-#     plt.close()
-#
-# if GRAPHS:
-#     fig, axs = plt.subplots(4, figsize=(6, 8))
-#     plural = {"wolf": "wolves", "sheep": "sheep", "grass": "grass"}
-#     vp_data = {
-#         "wolf": vp_wolf_counts,
-#         "sheep": vp_sheep_counts,
-#         "grass": vp_grass_counts,
-#     }
-#     max_scales = {
-#         "wolf": 10 * mean_init_wolves,
-#         "sheep": 10 * mean_init_sheep,
-#         "grass": 10 * mean_init_grass_proportion * GRID_HEIGHT * GRID_WIDTH,
-#     }
-#     for idx, state_var_name in enumerate(["wolf", "sheep", "grass"]):
-#         axs[idx].plot(
-#             vp_data[state_var_name],
-#             label="true value",
-#             color="black",
-#         )
-#         axs[idx].plot(
-#             range(TIME_SPAN + 1),
-#             mean_vec[:, idx],
-#             label="estimate",
-#         )
-#         axs[idx].fill_between(
-#             range(TIME_SPAN + 1),
-#             np.maximum(
-#                 0.0,
-#                 mean_vec[:, idx] - np.sqrt(cov_matrix[:, idx, idx]),
-#             ),
-#             np.minimum(
-#                 max_scales[state_var_name],
-#                 mean_vec[:, idx] + np.sqrt(cov_matrix[:, idx, idx]),
-#             ),
-#             color="gray",
-#             alpha=0.35,
-#         )
-#         axs[idx].set_title(state_var_name.replace("_"," "), loc="center", wrap=True)
-#         axs[idx].legend()
-#     axs[3].set_title("surprisal", loc="center", wrap=True)
-#     axs[3].plot(surprisal_state, label="state surprisal")
-#     axs[3].plot(
-#         [0, TIME_SPAN + 1], [mean_surprisal_state, mean_surprisal_state], ":", color="black"
-#     )
-#     fig.tight_layout()
-#     fig.savefig(FILE_PREFIX + f"match.pdf")
-#     plt.close(fig)
-#
-# np.savez_compressed(
-#     FILE_PREFIX + f"data.npz",
-#     vp_full_trajectory=vp_full_trajectory,
-#     mean_vec=mean_vec,
-#     cov_matrix=cov_matrix,
-# )
-# with open(FILE_PREFIX + "mean_surprisal.csv", "w") as file:
-#     csvwriter = csv.writer(file, delimiter=",", quoting=csv.QUOTE_MINIMAL)
-#     csvwriter.writerow(["full", "state", "param"])
-#     csvwriter.writerow([mean_surprisal_full, mean_surprisal_state, mean_surprisal_param])
+np.savez_compressed(
+    FILE_PREFIX + f"data.npz",
+    vp_full_trajectory=vp_trajectory,
+    mean_vec=mean_vec,
+    cov_matrix=cov_matrix,
+)
