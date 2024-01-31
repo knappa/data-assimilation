@@ -33,6 +33,7 @@ else:
         "--measurements",
         type=str,
         choices=[
+            "P_DAMPS",
             "T1IFN",
             "TNF",
             "IFNg",
@@ -240,7 +241,7 @@ if GRAPHS:
         row, col = divmod(idx, state_var_graphs_cols)
         axs[row, col].set_axis_off()
     fig.tight_layout()
-    fig.savefig(FILE_PREFIX + "virtual-patient.pdf")
+    fig.savefig(FILE_PREFIX + "virtual-patient-trajectory.pdf")
     plt.close(fig)
 
 

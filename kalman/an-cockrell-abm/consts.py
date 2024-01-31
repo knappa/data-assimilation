@@ -88,6 +88,7 @@ default_params = dict(
 
 # variables which reflect the macrostate of the model
 state_vars = [
+    "total_P_DAMPS",
     "total_T1IFN",
     "total_TNF",
     "total_IFNg",
