@@ -267,7 +267,7 @@ names_full = set(variational_params_filtered_aug[indices_full])
 if GRAPHS:
     fig, axs = plt.subplots(4, 4)
     for idx, name in enumerate([k for k in f.keys() if k != "param_list"]):
-        row, col = idx // 4, idx % 4
+        row, col = divmod(idx, 4)
         axs[row, col].plot(
             full_data_log_sensitivity.reshape(
                 full_data_log_sensitivity.shape[0], *full_data.shape[1:]
@@ -280,7 +280,7 @@ if GRAPHS:
     fig, axs = plt.subplots(4, 4, sharex=True, layout="constrained")
     lines = None
     for idx, name in enumerate([k for k in f.keys() if k != "param_list"]):
-        row, col = idx // 4, idx % 4
+        row, col = divmod(idx, 4)
         lines = axs[row, col].plot(
             full_data_log_sensitivity.reshape(
                 full_data_log_sensitivity.shape[0], *full_data.shape[1:]

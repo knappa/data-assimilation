@@ -192,7 +192,7 @@ if GRAPHS:
         sharey=False,
     )
     for idx, state_var_name in enumerate(state_vars):
-        row, col = idx // state_var_graphs_cols, idx % state_var_graphs_cols
+        row, col = divmod(idx, state_var_graphs_cols)
         axs[row, col].plot(vp_trajectory[:, idx])
 
         axs[row, col].set_title(
@@ -321,7 +321,7 @@ while time < TIME_SPAN:
             sharey=False,
         )
         for idx, state_var_name in enumerate(state_vars):
-            row, col = idx // state_var_graphs_cols, idx % state_var_graphs_cols
+            row, col = divmod(idx, state_var_graphs_cols)
             axs[row, col].plot(
                 vp_trajectory[: (cycle + 1) * SAMPLE_INTERVAL + 1, idx],
                 label="true value",
@@ -373,10 +373,7 @@ while time < TIME_SPAN:
             sharey=False,
         )
         for idx, param_name in enumerate(variational_params):
-            row, col = (
-                idx // variational_params_graphs_cols,
-                idx % variational_params_graphs_cols,
-            )
+            row, col = divmod(idx, variational_params_graphs_cols)
 
             if param_name in vp_init_params:
                 axs[row, col].plot(
@@ -446,10 +443,7 @@ while time < TIME_SPAN:
             len(variational_params),
             variational_params_graphs_rows * variational_params_graphs_cols,
         ):
-            row, col = (
-                idx // variational_params_graphs_cols,
-                idx % variational_params_graphs_cols,
-            )
+            row, col = divmod(idx, variational_params_graphs_cols)
             axs[row, col].axis("off")
 
         handles, labels = axs[0, 0].get_legend_handles_labels()
