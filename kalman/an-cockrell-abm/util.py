@@ -225,5 +225,5 @@ def fix_title(s: str, *, break_len=14):
         else:
             idx = s.find(" ")
         if idx != -1:
-            s = s[:break_len] + "\n" + s[break_len + 1 :]
+            s = s[:idx] + "\n" + s[idx + 1 :]
     return s
