@@ -17,7 +17,7 @@ from consts import default_params, variational_params
 
 # constants
 init_inoculum = 100
-num_sims = 10_000
+num_sims = 500
 num_steps = 2016  # <- full run value
 
 
