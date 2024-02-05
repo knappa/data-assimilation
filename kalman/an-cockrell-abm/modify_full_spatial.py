@@ -1,5 +1,5 @@
 import itertools
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Tuple
 
 import h5py
 import numpy as np
@@ -212,7 +212,7 @@ quantizer = quantization_maker(
 def dither(
     model: AnCockrellModel,
     new_epi_counts,
-) -> np.ndarray:
+) -> Tuple[np.ndarray, np.ndarray]:
     # store spatial distribution of one-hot encoding for epithelial cell type
     state_vecs = np.zeros(shape=(*model.geometry, block_dim), dtype=np.float64)
     state_vecs[:, :, : len(EpiType)] = epitype_one_hot_encoding(model.epithelium)
@@ -333,7 +333,10 @@ def dither(
             1 - np.sum(state_vecs[row_idx_plus, col_idx_plus, : len(EpiType)])
         ) / len(EpiType)
 
-    return np.argmax(state_vecs, axis=2)
+    return (
+        np.argmax(state_vecs[:, :, : len(EpiType)], axis=2),
+        state_vecs[:,:,len(EpiType) :],
+    )
 
 
 ################################################################################
@@ -358,54 +361,63 @@ def rescale_spatial_variables(desired_state, model, state_var_indices):
     else:
         random_field = smooth_random_field(model.geometry)
         model.T1IFN[:] = random_field * desired_t1ifn / np.sum(random_field)
+
     desired_tnf = desired_state[state_var_indices["total_TNF"]]
     if model.total_TNF > 0:
         model.TNF *= desired_tnf / model.total_TNF
     else:
         random_field = smooth_random_field(model.geometry)
         model.TNF[:] = random_field * desired_tnf / np.sum(random_field)
+
     desired_ifn_g = desired_state[state_var_indices["total_IFNg"]]
     if model.total_IFNg > 0:
         model.IFNg *= desired_ifn_g / model.total_IFNg
     else:
         random_field = smooth_random_field(model.geometry)
         model.IFNg[:] = random_field * desired_ifn_g / np.sum(random_field)
+
     desired_il1 = desired_state[state_var_indices["total_IL1"]]
     if model.total_IL1 > 0:
         model.IL1 *= desired_il1 / model.total_IL1
     else:
         random_field = smooth_random_field(model.geometry)
         model.IL1[:] = random_field * desired_il1 / np.sum(random_field)
+
     desired_il6 = desired_state[state_var_indices["total_IL6"]]
     if model.total_IL6 > 0:
         model.IL6 *= desired_il6 / model.total_IL6
     else:
         random_field = smooth_random_field(model.geometry)
         model.IL6[:] = random_field * desired_il6 / np.sum(random_field)
+
     desired_il8 = desired_state[state_var_indices["total_IL8"]]
     if model.total_IL8 > 0:
         model.IL8 *= desired_il8 / model.total_IL8
     else:
         random_field = smooth_random_field(model.geometry)
         model.IL8[:] = random_field * desired_il8 / np.sum(random_field)
+
     desired_il10 = desired_state[state_var_indices["total_IL10"]]
     if model.total_IL10 > 0:
         model.IL10 *= desired_il10 / model.total_IL10
     else:
         random_field = smooth_random_field(model.geometry)
         model.IL10[:] = random_field * desired_il10 / np.sum(random_field)
+
     desired_il12 = desired_state[state_var_indices["total_IL12"]]
     if model.total_IL12 > 0:
         model.IL12 *= desired_il12 / model.total_IL12
     else:
         random_field = smooth_random_field(model.geometry)
         model.IL12[:] = random_field * desired_il12 / np.sum(random_field)
+
     desired_il18 = desired_state[state_var_indices["total_IL18"]]
     if model.total_IL18 > 0:
         model.IL18 *= desired_il18 / model.total_IL18
     else:
         random_field = smooth_random_field(model.geometry)
         model.IL18[:] = random_field * desired_il18 / np.sum(random_field)
+
     desired_total_extracellular_virus = desired_state[
         state_var_indices["total_extracellular_virus"]
     ]
@@ -575,9 +587,16 @@ def modify_model(
     # quantizer better incoming information and 2. to improve accuracy of spatial
     # variable estimates
     rescale_spatial_variables(desired_state, model, state_var_indices)
-    model.epithelium[:, :] = dither(
+    model.epithelium[:, :], spatial_dither = dither(
         model, compute_desired_epi_counts(desired_state, model, state_var_indices)
     )
+    # copy dithered values into model
+    for idx, spatial_var in enumerate(spatial_vars):
+        sv = getattr(model, spatial_var)
+        if np.issubdtype(sv.dtype, np.integer):
+            sv[:, :] = spatial_dither[:, :, idx].astype(np.int64)
+        else:
+            sv[:, :] = spatial_dither[:, :, idx]
     rescale_spatial_variables(desired_state, model, state_var_indices)
 
     ################################################################################
