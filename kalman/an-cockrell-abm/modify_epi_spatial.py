@@ -1,4 +1,3 @@
-from typing import Callable, Tuple
 from typing import Callable, Iterable, Tuple
 
 import h5py
@@ -7,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from an_cockrell import AnCockrellModel, EndoType, EpiType, epitype_one_hot_encoding
 
-from util import compute_desired_epi_counts, smooth_random_field
+from util import cmap, compute_desired_epi_counts, smooth_random_field
 
 ################################################################################
 
@@ -156,7 +155,13 @@ def dither(
         axs.append(fig.add_subplot(gs[1, plt_idx]))
 
     # orig_cat_plot =
-    axs[0].imshow(np.argmax(state_vecs, axis=2), vmin=0, vmax=4)
+    axs[0].imshow(
+        np.argmax(state_vecs, axis=2),
+        vmin=0,
+        vmax=4,
+        interpolation="nearest",
+        cmap=cmap,
+    )
 
     # counts of epi cell types for the incoming model
     prev_epi_count = np.sum(state_vecs, axis=(0, 1), dtype=int)
@@ -175,7 +180,13 @@ def dither(
     # ensure that all locations sum to 1
     state_vecs += ((1 - np.sum(state_vecs, axis=2)) / len(EpiType))[:, :, np.newaxis]
 
-    new_cat_plot = axs[1].imshow(np.argmax(state_vecs, axis=2), vmin=0, vmax=4)
+    new_cat_plot = axs[1].imshow(
+        np.argmax(state_vecs, axis=2),
+        vmin=0,
+        vmax=4,
+        interpolation="nearest",
+        cmap=cmap,
+    )
     state_plots = [
         axs[idx + 2].imshow(state_vecs[:, :, idx], vmin=0, vmax=1.5) for idx in range(5)
     ]

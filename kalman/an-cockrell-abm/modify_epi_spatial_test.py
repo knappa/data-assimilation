@@ -16,7 +16,7 @@ from consts import (
     state_vars,
     variational_params,
 )
-from modify_epi_spatial import modify_model
+from modify_epi_spatial import dither, modify_model
 from util import model_macro_data
 
 ################################################################################
@@ -184,9 +184,8 @@ new_macro_state = macro_state.copy()
 new_macro_state[state_var_indices["healthy_epithelium_count"]] += 300
 new_macro_state[state_var_indices["infected_epithelium_count"]] -= 300
 
-from modify_epi_spatial import dither, quantizer
 
-updated_epithelium = dither(
+updated_epithelium, ani = dither(
     model,
     new_macro_state[
         [

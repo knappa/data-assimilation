@@ -1,13 +1,13 @@
-import itertools
 from typing import Callable, Iterable, Tuple
 
 import h5py
+import matplotlib.pyplot as plt
 import numpy as np
 from an_cockrell import AnCockrellModel, EndoType, EpiType, epitype_one_hot_encoding
 from matplotlib import animation
 from scipy.optimize import Bounds, OptimizeResult, lsq_linear
 
-from util import compute_desired_epi_counts, smooth_random_field
+from util import cmap, compute_desired_epi_counts, smooth_random_field
 
 ################################################################################
 
@@ -234,7 +234,11 @@ def dither(
         axs.append(fig.add_subplot(gs[row_idx, col_idx]))
     # orig_cat_plot =
     axs[0].imshow(
-        np.argmax(state_vecs[:, :, : len(EpiType)], axis=2), vmin=0, vmax=max(EpiType)
+        np.argmax(state_vecs[:, :, : len(EpiType)], axis=2),
+        vmin=0,
+        vmax=max(EpiType),
+        interpolation="nearest",
+        cmap=cmap,
     )
 
     # counts of epi cell types for the incoming model
@@ -257,7 +261,11 @@ def dither(
     )[:, :, np.newaxis]
 
     new_cat_plot = axs[1].imshow(
-        np.argmax(state_vecs[:, :, : len(EpiType)], axis=2), vmin=0, vmax=4
+        np.argmax(state_vecs[:, :, : len(EpiType)], axis=2),
+        vmin=0,
+        vmax=4,
+        interpolation="nearest",
+        cmap=cmap,
     )
     state_plots = [
         axs[idx + 2].imshow(np.abs(state_vecs[:, :, idx]), vmin=0, vmax=1.5)
@@ -397,7 +405,9 @@ def dither(
         ani,
     )
 
+
 ################################################################################
+
 
 def rescale_spatial_variables(desired_state, model, state_var_indices):
     """
@@ -485,16 +495,16 @@ def rescale_spatial_variables(desired_state, model, state_var_indices):
     else:
         model.infect(int(np.rint(desired_total_extracellular_virus)))
 
-
-################################################################################
+    ################################################################################
 
     fig, axs = plt.subplots(2)
-    dither_result, ani = dither(
+    epi_dither_result, mol_dither_result, ani = dither(
         model, compute_desired_epi_counts(desired_state, model, state_var_indices)
     )
     axs[0].imshow(model.epithelium.astype(int), vmin=0, vmax=4)
-    axs[1].imshow(dither_result.astype(int), vmin=0, vmax=4)
+    axs[1].imshow(epi_dither_result.astype(int), vmin=0, vmax=4)
     input()
+
 
 def update_macrophage_count(desired_state, model, state_var_indices):
     macro_delta = int(
@@ -651,7 +661,7 @@ def modify_model(
     # quantizer better incoming information and 2. to improve accuracy of spatial
     # variable estimates
     rescale_spatial_variables(desired_state, model, state_var_indices)
-    model.epithelium[:, :], spatial_dither = dither(
+    model.epithelium[:, :], spatial_dither, ani = dither(
         model, compute_desired_epi_counts(desired_state, model, state_var_indices)
     )
     # copy dithered values into model

@@ -16,8 +16,8 @@ from consts import (
     state_vars,
     variational_params,
 )
-from modify_full_spatial import modify_model
-from util import model_macro_data
+from modify_full_spatial import dither, modify_model
+from util import cmap, model_macro_data
 
 ################################################################################
 
@@ -184,7 +184,6 @@ new_macro_state = macro_state.copy()
 new_macro_state[state_var_indices["healthy_epithelium_count"]] += 300
 new_macro_state[state_var_indices["infected_epithelium_count"]] -= 300
 
-from modify_full_spatial import dither
 
 new_epi_counts = new_macro_state[
     [
@@ -196,14 +195,22 @@ new_epi_counts = new_macro_state[
     ]
 ]
 
-updated_epithelium = dither(
+updated_epithelium, updated_cytokines, ani = dither(
     model,
     new_epi_counts,
 )
 
 fig, axs = plt.subplots(3)
-axs[0].imshow(model.epithelium.astype(int), vmin=0, vmax=4)
-axs[1].imshow(updated_epithelium.astype(int), vmin=0, vmax=4)
+axs[0].imshow(
+    model.epithelium.astype(int),
+    vmin=0,
+    vmax=4,
+    cmap=cmap,
+    interpolation="nearest",
+)
+axs[1].imshow(
+    updated_epithelium.astype(int), vmin=0, vmax=4, cmap=cmap, interpolation="nearest"
+)
 axs[2].imshow(
     model.epithelium.astype(int) - updated_epithelium.astype(int), vmin=-4, vmax=4
 )
