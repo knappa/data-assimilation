@@ -88,11 +88,6 @@ def quantization_maker(
             neighbor_states[model.epithelium[block_row, block_col]] += 1
 
         # evaluate the various quantizations
-        loss_weights = {
-            "similarity": 1.0,
-            "typical_neighborhood": 0.002,
-            "neighbor_similarity": 1.0,
-        }
         min_type = -1
         min_neg_log_likelihood = float("inf")
         for epitype in available_epitypes:
