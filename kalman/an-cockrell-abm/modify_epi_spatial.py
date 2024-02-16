@@ -1,4 +1,4 @@
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Tuple
 
 import h5py
 import numpy as np
@@ -136,7 +136,7 @@ quantizer = quantization_maker(
 def dither(
     model: AnCockrellModel,
     new_epi_counts,
-) -> np.ndarray:
+) -> Tuple[np.ndarray, np.ndarray]:
     # store spatial distribution of one-hot encoding for epithelial cell type
     # state_vecs = np.zeros(shape=(*model.geometry, 5), dtype=np.float64)
     state_vecs = epitype_one_hot_encoding(model.epithelium)
@@ -157,6 +157,8 @@ def dither(
             state_vecs[:, :, idx] = new_count * rand_field / np.sum(rand_field)
     # ensure that all locations sum to 1
     state_vecs += ((1 - np.sum(state_vecs, axis=2)) / len(EpiType))[:, :, np.newaxis]
+
+    rescaled_state_vecs_copy = state_vecs.copy()
 
     newly_set_epi_counts = np.zeros(len(EpiType), dtype=np.int64)
 
@@ -257,7 +259,7 @@ def dither(
                 1 - np.sum(state_vecs[row_idx_plus, col_idx_plus, :])
             ) / len(EpiType)
 
-    return np.argmax(state_vecs, axis=2)
+    return np.argmax(state_vecs, axis=2), rescaled_state_vecs_copy
 
 
 def modify_model(
