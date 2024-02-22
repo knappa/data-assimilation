@@ -335,7 +335,7 @@ def dither(
 
     return (
         np.argmax(state_vecs[:, :, : len(EpiType)], axis=2),
-        state_vecs[:,:,len(EpiType) :],
+        state_vecs[:, :, len(EpiType) :],
     )
 
 

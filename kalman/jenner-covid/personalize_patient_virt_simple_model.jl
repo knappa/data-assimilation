@@ -8,6 +8,7 @@ using Random
 using NaNMath
 import BasicInterpolators
 import SciMLBase
+using HDF5
 
 # Random.seed!(14);
 
@@ -38,23 +39,16 @@ const eigenvalue_epsilon = 1e-6
 ################################################################################
 # load virtual population posteriors as our parameter priors
 
-virtual_pop_prior_log_mean, virtual_pop_prior_logΣ =
-    JLD2.load("dyn_param_virtual_pop.jld2", "posterior_log_mean", "posterior_Σ")
+virtual_pop_prior_mean, virtual_pop_prior_Σ =
+    JLD2.load("virtual_population_statistics.jld2", "posterior_mean", "posterior_Σ")
 
 # cleanup    
-virtual_pop_prior_log_mean = vec(virtual_pop_prior_log_mean)
-# print(max((virtual_pop_prior_Σ - virtual_pop_prior_Σ')...), " should be < about 1e-16")
-virtual_pop_prior_logΣ = Symmetric(virtual_pop_prior_logΣ)
+virtual_pop_prior_mean = vec(virtual_pop_prior_mean)
+virtual_pop_prior_Σ = Symmetric(virtual_pop_prior_Σ)
 
 # select parts relevant to sub-model
-virtual_pop_prior_log_mean = virtual_pop_prior_log_mean[[1, 2]]
-virtual_pop_prior_logΣ = virtual_pop_prior_logΣ[[1, 2], [1, 2]]
-
-# de-log it
-virtual_pop_prior_mean = exp.(virtual_pop_prior_log_mean + diag(virtual_pop_prior_logΣ) / 2)
-virtual_pop_prior_Σ =
-    (virtual_pop_prior_log_mean * virtual_pop_prior_log_mean') .*
-    exp.(virtual_pop_prior_logΣ .- 1)
+virtual_pop_prior_mean = virtual_pop_prior_mean[[1, 2]]
+virtual_pop_prior_Σ = virtual_pop_prior_Σ[[1, 2], [1, 2]]
 
 ################################################################################
 # create prior distributions (initial and historical)
@@ -68,8 +62,7 @@ initial_condition_state = [V0, S0, I0, D0]
 # we need to keep a substantial history due to the delay 
 const history_size = 1 + ceil(Int, max_tau_T / dt)
 const state_space_dim = length(initial_condition_state)
-const unified_state_space_dimension =
-    state_space_dim + length(virtual_pop_prior_log_mean) - 1
+const unified_state_space_dimension = state_space_dim + length(virtual_pop_prior_mean) - 1
 
 # create the historical means 
 means = zeros(unified_state_space_dimension, history_size)
@@ -79,7 +72,8 @@ means[state_space_dim+1:end, :] .= virtual_pop_prior_mean[2:end]
 
 # create the historical covariance matrices
 prior_Σs = zeros(unified_state_space_dimension, unified_state_space_dimension, history_size)
-prior_Σs[2:state_space_dim, 2:state_space_dim, :] .= 0.1 * I(state_space_dim - 1)
+prior_Σs[2:state_space_dim, 2:state_space_dim, :] .=
+    diagm((0.1 * initial_condition_state[2:end]) .^ 2)
 # the prior starts with V0, which messes with the block structure a little bit,
 # so we have to put it in the right places
 prior_Σs[1, 1, :] .= virtual_pop_prior_Σ[1, 1]
@@ -450,7 +444,7 @@ for interval_idx = 1:length(time_intervals)-1
     # kalman update
     # for ref: m^- = history_sample_means[:, end], P^- = history_sample_covs[:, :, end]
     S = (H * history_sample_covs[:, :, end] * H') .+ R
-    K = history_sample_covs[:, :, end] * H' * pinv(S) # pinv?
+    K = history_sample_covs[:, :, end] * H' * pinv(S)
     v =
         virtual_patient_trajectory(time_intervals[interval_idx+1])[sample_idx] -
         H * history_sample_means[:, end]
@@ -502,7 +496,7 @@ for interval_idx = 1:length(time_intervals)-1
             G =
                 history_sample_covs[:, :, hist_idx] *
                 A' *
-                pinv(A * history_sample_covs[:, :, hist_idx] * A' + Q) # inv/pinv?
+                pinv(A * history_sample_covs[:, :, hist_idx] * A' + Q)
 
             smoothed_means[:, hist_idx] =
                 abs.(
@@ -564,6 +558,12 @@ for interval_idx = 1:length(time_intervals)-1
         "kalman-update-$interval_idx.jld2",
         Dict("means" => means, "prior_Σs" => prior_Σs),
     )
+
+    fid = h5open("kalman-update-$interval_idx.hdf5", "w")
+    fid["mean"] = means
+    fid["cov"] = prior_Σs
+    close(fid)
+
 
     ################################################################################
 

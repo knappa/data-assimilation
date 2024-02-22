@@ -38,7 +38,7 @@ var_meaning = [  # py/matlab index (julia index=matlab index)
 include("model_constants.jl")
 
 # tau_T = 4.5 and this is more than twice that, which will have to be sufficient
-const max_tau_T = 10.0 
+const max_tau_T = 10.0
 
 ################################################################################
 
@@ -70,7 +70,8 @@ function covid_model(dy, y, history, p, t)
     p_M_I,
     eta_F_MPhi,
     eps_F_I,
-    p_F_M, tau_T = y
+    p_F_M,
+    tau_T = y
 
     tau_T = min(tau_T, max_tau_T)
 
@@ -186,7 +187,8 @@ function covid_model_jacobian(y, history, p, t)
     p_M_I,
     eta_F_MPhi,
     eps_F_I,
-    p_F_M, tau_T = y
+    p_F_M,
+    tau_T = y
 
     tau_T = min(tau_T, max_tau_T)
 
@@ -371,7 +373,8 @@ function history_maker(initial_conditions)
     p_M_I_ic,
     eta_F_MPhi_ic,
     eps_F_I_ic,
-    p_F_M_ic, tau_T_ic = initial_conditions
+    p_F_M_ic,
+    tau_T_ic = initial_conditions
 
     function history(p, t; idxs = nothing)
         if typeof(idxs) <: Number
@@ -570,8 +573,12 @@ function noise_vec(sird_noise, state_var_noise, param_noise)
     return noise_vec
 end
 
-function log_noise_matrix(sird_noise, state_var_noise, param_noise)
-    return diagm(noise_vec(sird_noise, state_var_noise, param_noise))
+# function log_noise_matrix(sird_noise, state_var_noise, param_noise)
+#     return diagm(noise_vec(sird_noise, state_var_noise, param_noise))
+# end
+
+function noise_matrix(sird_noise, state_var_noise, param_noise, state_vec)
+    return diagm(noise_vec(sird_noise, state_var_noise, param_noise) .* state_vec)
 end
 
 function covid_model_noise(du, u, h, p, t)

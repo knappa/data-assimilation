@@ -1,14 +1,9 @@
 using LinearAlgebra
-using Plots
 using DifferentialEquations
 using StochasticDelayDiffEq
-using LaTeXStrings
 using JLD2
-# using Turing
-# using StatsPlots
+using Distributions
 using Random
-# using MCMCChains
-# using NPZ
 
 # Random.seed!(14);
 
@@ -18,17 +13,20 @@ include("model_full.jl")
 include("data.jl")
 
 ################################################################################
+
+virus_noise = 0.1
+
+################################################################################
 # solve system
 
 num_samples = 100_000
 
-virus_noise = 0.1
-prior_log_means = append!([log(V0) - virus_noise / 2], log_mu_vec) # V0 and params
-prior_Σ = diagm(append!([virus_noise], log_sigma2_vec))
+prior_means = append!([V0], mu_vec) # V0 and params
+prior_Σ = diagm(append!([virus_noise], cov_vec))
 
-log_prior = MvNormal(prior_log_means, prior_Σ)
+prior = MvNormal(prior_means, prior_Σ)
 
-param_samples = zeros(num_samples, length(prior_log_means))
+param_samples = zeros(num_samples, length(prior_means))
 
 for idx = 1:num_samples
     if idx % 10 == 0
@@ -37,7 +35,7 @@ for idx = 1:num_samples
     accept = false
     while !accept
 
-        param_samples[idx, :] .= exp.(rand(log_prior))
+        param_samples[idx, :] .= max.(0.0, rand(prior))
 
         V0_samp,
         beta_samp,
@@ -85,6 +83,7 @@ for idx = 1:num_samples
             eta_F_MPhi_0,
             eps_F_I_0,
             p_F_M_0,
+            tau_T_samp,
         ]
 
         sdde_prob_ic = remake(
@@ -101,11 +100,16 @@ for idx = 1:num_samples
     end
 end
 
-log_param_samples = log.(param_samples)
-posterior_log_mean = mean(log_param_samples, dims = 1)
+posterior_mean = mean(param_samples, dims = 1)
 posterior_Σ =
-    (log_param_samples .- posterior_log_mean)' * (log_param_samples .- posterior_log_mean) /
-    num_samples
+    (param_samples .- posterior_mean)' * (param_samples .- posterior_mean) / num_samples
 
 
-JLD2.@save "dyn_param_virtual_pop.jld2" posterior_log_mean posterior_Σ
+JLD2.@save "virtual_population_statistics.jld2" posterior_mean posterior_Σ
+
+using HDF5
+
+fid = h5open("virtual_population_statistics.hdf5", "w")
+fid["posterior_mean"] = posterior_mean
+fid["posterior_cov"] = posterior_Σ
+close(fid)
