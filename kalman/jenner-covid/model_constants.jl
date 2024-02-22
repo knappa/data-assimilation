@@ -284,5 +284,3 @@ const sigma_vec = [
 ]
 
 const cov_vec = sigma_vec .^ 2
-const log_sigma2_vec = log1p.(cov_vec ./ (mu_vec .^ 2))
-const log_mu_vec = log.(mu_vec) .- log_sigma2_vec / 2
