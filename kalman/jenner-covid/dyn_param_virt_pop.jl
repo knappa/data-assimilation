@@ -35,7 +35,7 @@ for idx = 1:num_samples
     accept = false
     while !accept
 
-        param_samples[idx, :] .= rand(prior)
+        param_samples[idx, :] .= max.(0.0, rand(prior))
 
         V0_samp,
         beta_samp,
@@ -106,3 +106,10 @@ posterior_Σ =
 
 
 JLD2.@save "virtual_population_statistics.jld2" posterior_mean posterior_Σ
+
+using HDF5
+
+fid = h5open("virtual_population_statistics.hdf5", "w")
+fid["posterior_mean"] = posterior_mean
+fid["posterior_cov"] = posterior_Σ
+close(fid)

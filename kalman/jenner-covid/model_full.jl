@@ -573,8 +573,12 @@ function noise_vec(sird_noise, state_var_noise, param_noise)
     return noise_vec
 end
 
-function log_noise_matrix(sird_noise, state_var_noise, param_noise)
-    return diagm(noise_vec(sird_noise, state_var_noise, param_noise))
+# function log_noise_matrix(sird_noise, state_var_noise, param_noise)
+#     return diagm(noise_vec(sird_noise, state_var_noise, param_noise))
+# end
+
+function noise_matrix(sird_noise, state_var_noise, param_noise, state_vec)
+    return diagm(noise_vec(sird_noise, state_var_noise, param_noise) .* state_vec)
 end
 
 function covid_model_noise(du, u, h, p, t)

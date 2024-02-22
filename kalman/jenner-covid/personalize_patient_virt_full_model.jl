@@ -8,6 +8,7 @@ using Random
 using NaNMath
 import BasicInterpolators
 import SciMLBase
+using HDF5
 
 # Random.seed!(14);
 
@@ -34,12 +35,11 @@ const observation_noise = 0.1
 ################################################################################
 # load virtual population posteriors as our parameter priors
 
-virtual_pop_prior_log_mean, virtual_pop_prior_Σ =
-    JLD2.load("dyn_param_virtual_pop.jld2", "posterior_log_mean", "posterior_Σ")
+virtual_pop_prior_mean, virtual_pop_prior_Σ =
+    JLD2.load("virtual_population_statistics.jld2", "posterior_mean", "posterior_Σ")
 
 # cleanup    
-virtual_pop_prior_log_mean = min.(100, max.(-25.0, vec(virtual_pop_prior_log_mean)))
-# print(max((virtual_pop_prior_Σ - virtual_pop_prior_Σ')...), " should be < about 1e-16")
+virtual_pop_prior_mean = vec(virtual_pop_prior_mean)
 virtual_pop_prior_Σ = Symmetric(virtual_pop_prior_Σ)
 
 ################################################################################
@@ -72,18 +72,18 @@ initial_condition_state = [
 
 # we need to keep a substantial history due to the delay 
 const history_size = 1 + ceil(Int, max_tau_T / dt)
-const unified_state_space_dimension = 18 - 1 + length(virtual_pop_prior_log_mean)
+const unified_state_space_dimension = 18 - 1 + length(virtual_pop_prior_mean)
 
 # create the historical means 
-log_means = zeros(unified_state_space_dimension, history_size)
+means = zeros(unified_state_space_dimension, history_size)
 # apparently exp(-1e3) == 0.0 on the nose, so we can get around the -Inf problem this way
-log_means[1, :] .= virtual_pop_prior_log_mean[1]
-log_means[2:18, :] .= max.(-1e3, log.(initial_condition_state[2:end]))
-log_means[19:end, :] .= virtual_pop_prior_log_mean[2:end]
+means[1, :] .= virtual_pop_prior_mean[1]
+means[2:18, :] .= initial_condition_state[2:end]
+means[19:end, :] .= virtual_pop_prior_mean[2:end]
 
 # create the historical covariance matrices
 prior_Σs = zeros(unified_state_space_dimension, unified_state_space_dimension, history_size)
-prior_Σs[2:18, 2:18, :] .= 0.1 * I(18 - 1)
+prior_Σs[2:18, 2:18, :] .= diagm((0.1 * initial_condition_state[2:18]) .^ 2)
 # the prior starts with V0, which messes with the block structure a little bit,
 # so we have to put it in the right places
 prior_Σs[1, 1, :] .= virtual_pop_prior_Σ[1, 1]
@@ -93,70 +93,78 @@ prior_Σs[19:end, 19:end, :] .= virtual_pop_prior_Σ[2:end, 2:end]
 
 ################################################################################
 
-function compute_symbolic_jacobian_log(log_initial_condition, log_history_interpolated, t)
+function compute_symbolic_jacobian(initial_condition, history_interpolated, t)
     const_params = (sird_noise, state_var_noise, param_noise)
-    history_interpolated(p, t; idxs = nothing) =
-        exp.(log_history_interpolated(p, t; idxs = idxs))
+
     dy = zeros(unified_state_space_dimension)
-    covid_model(dy, log_initial_condition, history_interpolated, const_params, t)
+    covid_model(dy, initial_condition, history_interpolated, const_params, t)
 
     return I -
-           dt *
-           diagm(exp.(-log_initial_condition)) *
-           (
-               diagm(dy) -
-               covid_model_jacobian(
-                   exp.(log_initial_condition),
-                   history_interpolated,
-                   const_params,
-                   t,
-               ) * diagm(exp.(log_initial_condition))
-           )
+           dt * (
+        diagm(dy) -
+        covid_model_jacobian(initial_condition, history_interpolated, const_params, t)
+    )
 end
 
 
-function compute_numerical_jacobian_log(
+function compute_numerical_jacobian(
     initial_condition,
-    log_history_interpolated,
+    sampled_history_interpolated,
     t_0,
     t_1,
 )
-    h = 0.1
     const_params = (sird_noise, state_var_noise, param_noise)
     history_interpolated(p, t; idxs = nothing) =
-        exp.(log_history_interpolated(p, t; idxs = idxs))
+        abs.(sampled_history_interpolated(p, t; idxs = idxs))
     J = zeros(unified_state_space_dimension, unified_state_space_dimension)
 
-    for component_idx = 1:length(initial_condition)
+    for component_idx in eachindex(initial_condition)
+
+        # ensure that +/- h never sends us negative
+        h = min(0.1, initial_condition[component_idx] / 2.0)
+        if (h == 0.0) | issubnormal(h)
+            continue
+        end
 
         ic_plus = copy(initial_condition)
         ic_plus[component_idx] += h
         dde_prob_ic = remake(
             dde_prob;
             tspan = (t_0, t_1),
-            u0 = exp.(ic_plus),
+            u0 = abs.(ic_plus),
             h = history_interpolated,
             p = const_params,
         )
-        plus_prediction =
-            solve(dde_prob_ic, dde_alg, alg_hints = [:stiff], saveat = [t_0, t_1])(t_1)
-
-        plus_prediction = max.(exp(-25), plus_prediction) # see explanation below about -25
+        plus_prediction = solve(
+            dde_prob_ic,
+            dde_alg,
+            alg_hints = [:stiff],
+            saveat = [t_0, t_1],
+            isoutofdomain = (u, p, t) -> (any(u .< 0.0)),
+        )(
+            t_1,
+        )
 
         ic_minus = copy(initial_condition)
         ic_minus[component_idx] -= h
         dde_prob_ic = remake(
             dde_prob;
             tspan = (t_0, t_1),
-            u0 = exp.(ic_minus),
+            u0 = abs.(ic_minus),
             h = history_interpolated,
             p = const_params,
         )
-        minus_prediction =
-            solve(dde_prob_ic, dde_alg, alg_hints = [:stiff], saveat = [t_0, t_1])(t_1)
-        minus_prediction = max.(exp(-25), minus_prediction) # see explanation below about -25
+        minus_prediction = solve(
+            dde_prob_ic,
+            dde_alg,
+            alg_hints = [:stiff],
+            saveat = [t_0, t_1],
+            isoutofdomain = (u, p, t) -> (any(u .< 0.0)),
+        )(
+            t_1,
+        )
 
-        J[component_idx, :] = (log.(plus_prediction) - log.(minus_prediction)) / (2 * h)
+        J[component_idx, :] = (plus_prediction - minus_prediction) / (2 * h)
     end
 
     return J
@@ -164,28 +172,22 @@ end
 
 ################################################################################
 
-function get_prediction(begin_time, end_time, log_prior)
+function get_prediction(begin_time, end_time, prior)
     # create history: first index is final time
     ts = [begin_time + dt * (idx - history_size) for idx = 1:history_size]
 
     while true
 
-        # use the mean for `prehistory`, random sampling for t >0
-        log_history_sample = hcat(
-            [
-                ts[idx] <= 0.0 ? log_prior[idx].μ : rand(log_prior[idx]) for
-                idx = 1:history_size
-            ]...,
-        )
+        history_sample_arr = hcat([abs.(rand(prior[idx])) for idx = 1:history_size]...)
 
-        log_history_interpolator = BasicInterpolators.LinearInterpolator(
+        history_interpolator = BasicInterpolators.LinearInterpolator(
             ts,
-            eachcol(log_history_sample),
+            eachcol(history_sample_arr),
             BasicInterpolators.NoBoundaries(),
         )
 
         function history_sample(p, t; idxs = nothing)
-            history_eval = exp.(log_history_interpolator(t))
+            history_eval = history_interpolator(t)
             if typeof(idxs) <: Number
                 return history_eval[idxs]
             else
@@ -193,13 +195,13 @@ function get_prediction(begin_time, end_time, log_prior)
             end
         end
 
-        initial_condition = exp.(log_history_sample[:, end])
+        initial_condition = history_sample_arr[:, end]
         # tau_T_samp <= max_tau_T
         initial_condition[end] = min(max_tau_T, initial_condition[end])
 
         const_params = (sird_noise, state_var_noise, param_noise)
 
-        stochastic_solutions = false
+        stochastic_solutions = true
         if stochastic_solutions
             sdde_prob_ic = remake(
                 sdde_prob;
@@ -213,8 +215,8 @@ function get_prediction(begin_time, end_time, log_prior)
                 sdde_alg,
                 alg_hints = [:stiff],
                 saveat = dt,
-                abstol = 1e-1, # 1e-9,
-                reltol = 1e-1, # standard
+                # abstol = 1e-1, # 1e-9,
+                # reltol = 1e-1, # standard
                 isoutofdomain = (u, p, t) -> (any(u .< 0.0)),
             )
         else
@@ -259,10 +261,10 @@ end # get_prediction
 
 ################################################################################
 
-log_prior = [CustomNormal(log_means[:, idx], prior_Σs[:, :, idx]) for idx = 1:history_size]
+prior = [CustomNormal(means[:, idx], prior_Σs[:, :, idx]) for idx = 1:history_size]
 
 virtual_patient_trajectory, virtual_patient_history =
-    get_prediction(virt_patient_tspan[1], virt_patient_tspan[2], log_prior)
+    get_prediction(virt_patient_tspan[1], virt_patient_tspan[2], prior)
 
 ################################################################################
 
@@ -305,9 +307,8 @@ for interval_idx = 1:2 # length(time_intervals)-1
     begin_time = time_intervals[interval_idx]
     end_time = time_intervals[interval_idx+1]
 
-    local log_prior
-    log_prior =
-        [CustomNormal(log_means[:, idx], prior_Σs[:, :, idx]) for idx = 1:history_size]
+    local prior
+    prior = [CustomNormal(means[:, idx], prior_Σs[:, :, idx]) for idx = 1:history_size]
 
     # we need to compute mean/covariance for both a history (used in the Kalman update)
     # and to plot. These will often be quite different.
@@ -330,20 +331,14 @@ for interval_idx = 1:2 # length(time_intervals)-1
             println(interval_idx, " ::: ", sample_idx)
         end
 
-        prediction, history_samp = get_prediction(begin_time, end_time, log_prior)
+        prediction, history_samp = get_prediction(begin_time, end_time, prior)
 
         # Welford's online algorithm for mean and covariance calculation. See Knuth Vol 2, pg 232
         for (time_idx, t) in enumerate(history_times)
-            # One can use exp(-1e3) == 0.0, to get around the -Inf problem (leads to NaNs)
-            # However, -1e3 skews the mean pretty badly, so we use exp(-25) ~ 1.4e-11, which
-            # is close enough 
-            # -25 ~ minimum(log.(y0)[log.(y0) .> -Inf])  - log(100)
             if t <= begin_time
-                sample = min.(100.0,max.(-25.0, log.(history_samp(t))))
-                # sample = min.(exp(100.0), max.(exp(-25.0), history_samp(t)))
+                sample = abs.(history_samp(t))
             else
-                sample = min.(100.0,max.(-25.0, log.(prediction(t))))
-                # sample = min.(exp(100.0), max.(exp(-25.0), prediction(t)))
+                sample = abs.(prediction(t))
             end
 
             old_mean = copy(history_sample_means[:, time_idx])
@@ -360,16 +355,10 @@ for interval_idx = 1:2 # length(time_intervals)-1
 
         # Welford's online algorithm for mean and variance calculation. See Knuth Vol 2, pg 232
         for (time_idx, t) in enumerate(plot_times)
-            # One can use exp(-1e3) == 0.0, to get around the -Inf problem (leads to NaNs)
-            # However, -1e3 skews the mean pretty badly, so we use exp(-25) ~ 1.4e-11, which
-            # is close enough
-            # -25 ~ minimum(log.(y0)[log.(y0) .> -Inf])  - log(100)
             if t <= begin_time
-                sample = min.(100.0,max.(-25.0, log.(history_samp(t))))
-                # sample = min.(exp(100.0), max.(exp(-25.0), history_samp(t)))
+                sample = abs.(history_samp(t))
             else
-                sample = min.(100.0,max.(-25.0, log.(prediction(t))))
-                # sample = min.(exp(100.0), max.(exp(-25.0), prediction(t)))
+                sample = abs.(prediction(t))
             end
 
             old_mean = copy(plot_sample_means[:, time_idx])
@@ -449,10 +438,10 @@ for interval_idx = 1:2 # length(time_intervals)-1
         plot!(
             param_plts[idx-19+1],
             plot_times,
-            exp.(plot_sample_means[idx, :]),
+            plot_sample_means[idx, :],
             ribbon = (
-                exp.(plot_sample_means[idx, :] - sqrt.(plot_sample_covs[idx, idx, :])),
-                exp.(plot_sample_means[idx, :] + sqrt.(plot_sample_covs[idx, idx, :])),
+                plot_sample_means[idx, :] - sqrt.(plot_sample_covs[idx, idx, :]),
+                plot_sample_means[idx, :] + sqrt.(plot_sample_covs[idx, idx, :]),
             ),
             fillalpha = 0.35,
             linecolor = :red,
@@ -501,7 +490,7 @@ for interval_idx = 1:2 # length(time_intervals)-1
     R = hcat([observation_noise])
 
     # state noise covariance matrix
-    Q = log_noise_matrix(sird_noise, state_var_noise, param_noise)
+    Q = noise_matrix(sird_noise, state_var_noise, param_noise, history_sample_means[:, end])
 
     smoothed_means = zeros(size(history_sample_means))
     smoothed_covs = zeros(size(history_sample_covs))
@@ -519,7 +508,7 @@ for interval_idx = 1:2 # length(time_intervals)-1
     # not nesc. at this point
     S = (H * history_sample_covs[:, :, end] * H') .+ R
     v =
-        log.(virtual_patient_trajectory(time_intervals[interval_idx+1])[sample_idx]) -
+        virtual_patient_trajectory(time_intervals[interval_idx+1])[sample_idx] -
         H * history_sample_means[:, end]
 
     smoothed_means[:, end] =
@@ -562,7 +551,7 @@ for interval_idx = 1:2 # length(time_intervals)-1
             smoothed_covs[:, :, hist_idx] = history_sample_covs[:, :, hist_idx]
         else
 
-            A_numerical = compute_numerical_jacobian_log(
+            A_numerical = compute_numerical_jacobian(
                 history_sample_means[:, hist_idx],
                 history_sample_means_interpolated,
                 history_times[hist_idx],
@@ -673,13 +662,19 @@ for interval_idx = 1:2 # length(time_intervals)-1
     # plt = plot(plts..., layout = (6, 3), size = (1000, 1500))
 
     # copy for next round
-    log_means .= smoothed_means
+    means .= smoothed_means
     prior_Σs .= smoothed_covs
 
     JLD2.save(
         "kalman-update-$sample_idx.jld2",
-        Dict("log_means" => log_means, "prior_Σs" => prior_Σs),
+        Dict("means" => means, "prior_Σs" => prior_Σs),
     )
+
+    fid = h5open("kalman-update-$interval_idx.hdf5", "w")
+    fid["mean"] = means
+    fid["cov"] = prior_Σs
+    close(fid)
+
 
     ################################################################################
 
