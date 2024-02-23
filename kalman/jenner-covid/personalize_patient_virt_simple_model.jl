@@ -9,8 +9,55 @@ using NaNMath
 import BasicInterpolators
 import SciMLBase
 using HDF5
+using ArgParse
+using ProgressBars
 
-# Random.seed!(14);
+
+################################################################################
+# command line parameters
+
+s = ArgParseSettings()
+
+@add_arg_table s begin
+    "--seed"
+    help = "random seed, default is system default"
+    arg_type = Int
+    default = -1
+    "--sird_noise"
+    help = "multiplicative noise scale for SIRD state variables"
+    arg_type = Float64
+    default = 0.01
+    "--state_var_noise"
+    help = "multiplicative noise scale for other state variables"
+    arg_type = Float64
+    default = 0.01
+    "--param_noise"
+    help = "multiplicative noise scale for parameters"
+    arg_type = Float64
+    default = 0.01
+    "--observation_noise"
+    help = "linear noise scale for observations"
+    arg_type = Float64
+    default = 0.01
+    "--prefix"
+    help = "filename prefix for output"
+    arg_type = String
+    default = ""
+end
+
+parsed_args = parse_args(s)
+
+if parsed_args["seed"] != -1
+    Random.seed!(parsed_args["seed"])
+end
+
+const sird_noise = parsed_args["sird_noise"]
+const state_var_noise = parsed_args["state_var_noise"]
+const param_noise = parsed_args["param_noise"]
+const observation_noise = parsed_args["observation_noise"]
+
+const filename_prefix =
+    length(parsed_args["prefix"]) > 0 ? (parsed_args["prefix"] * "-") : ""
 
 ################################################################################
 
@@ -18,23 +65,6 @@ include("model_simple.jl")
 include("data.jl")
 include("dist.jl")
 include("util.jl")
-
-################################################################################
-
-const virt_patient_tspan = (0.0, 10.0)
-const num_samples = 1_000
-const dt = 0.1
-const sample_dt = 1 # probably should be multiple of dt
-const sample_idx = 1
-
-# these values need to be explored
-const sird_noise = 0.01
-const state_var_noise = 0.01
-const param_noise = 0.01
-const observation_noise = 0.01
-
-# smallest allowed eigenvalue in numerical cleanup
-const eigenvalue_epsilon = 1e-6
 
 ################################################################################
 # load virtual population posteriors as our parameter priors
@@ -60,9 +90,23 @@ virtual_pop_prior_Σ = virtual_pop_prior_Σ[[1, 2], [1, 2]]
 initial_condition_state = [V0, S0, I0, D0]
 
 # we need to keep a substantial history due to the delay 
+const dt = 0.1
 const history_size = 1 + ceil(Int, max_tau_T / dt)
 const state_space_dim = length(initial_condition_state)
 const unified_state_space_dimension = state_space_dim + length(virtual_pop_prior_mean) - 1
+
+const simulation_end_time = 10.0
+const virt_patient_tspan = (0.0, simulation_end_time)
+const num_samples =
+    Integer(10 * unified_state_space_dimension * (unified_state_space_dimension - 1) / 2.0)
+const sample_dt = 1 # probably should be multiple of dt
+const sample_idx = 1
+
+println("number of samples $num_samples")
+
+# smallest allowed eigenvalue in numerical cleanup
+const eigenvalue_epsilon = 1e-6
+
 
 # create the historical means 
 means = zeros(unified_state_space_dimension, history_size)
@@ -251,6 +295,25 @@ JLD2.save(
     ),
 )
 
+h5open(filename_prefix * "data.hdf5", "w") do fid
+    g = create_group(fid, "virtual_patient")
+
+    dset = create_dataset(g, "trajectory_t", Float64, size(virtual_patient_trajectory.t))
+    write(dset, virtual_patient_trajectory.t)
+
+    virtual_patient_trajectory_u = vcat(virtual_patient_trajectory.u'...)
+    dset = create_dataset(g, "trajectory_u", Float64, size(virtual_patient_trajectory_u))
+    write(dset, virtual_patient_trajectory_u)
+
+    history_t = Vector((-max_tau_T):dt:0)
+    dset = create_dataset(g, "history_t", Float64, size(history_t))
+    write(dset, history_t)
+
+    history_u = vcat([virtual_patient_history(t) for t in history_t]'...)
+    dset = create_dataset(g, "history_u", Float64, size(history_u))
+    write(dset, history_u)
+end
+
 ################################################################################
 
 state_plts = []
@@ -264,7 +327,7 @@ for idx = 1:state_space_dim
     push!(state_plts, subplt)
 end
 plt = plot(state_plts..., layout = (2, 2), size = (700, 500))
-Plots.savefig(plt, "personalization-virt-s0-state.pdf")
+Plots.savefig(plt, filename_prefix * "s0-state.pdf")
 println("initial state plot saved")
 
 param_plts = []
@@ -278,15 +341,27 @@ for idx = state_space_dim+1:unified_state_space_dimension
     push!(param_plts, subplt)
 end
 plt = plot(param_plts..., layout = (1, 1), size = (300, 250))
-Plots.savefig(plt, "personalization-virt-s0-param.pdf")
+Plots.savefig(plt, filename_prefix * "s0-param.pdf")
 println("initial param plot saved")
-
 
 ################################################################################
 
-time_intervals = Vector(virt_patient_tspan[1]:sample_dt:virt_patient_tspan[2])
+const time_intervals = Vector(virt_patient_tspan[1]:sample_dt:virt_patient_tspan[2])
 
-for interval_idx = 1:length(time_intervals)-1
+const prediction_size = 1 + ceil(Int, (virt_patient_tspan[2] - virt_patient_tspan[1]) / dt)
+prediction_ts = Vector(virt_patient_tspan[1]:dt:virt_patient_tspan[2])
+mean_record =
+    zeros(unified_state_space_dimension, prediction_size, length(time_intervals) - 1)
+Σ_record_unscaled = zeros(
+    unified_state_space_dimension,
+    unified_state_space_dimension,
+    prediction_size,
+    length(time_intervals) - 1,
+)
+
+################################################################################
+
+for interval_idx in ProgressBar(1:length(time_intervals)-1)
 
     # determine the current time interval to test
     begin_time = time_intervals[interval_idx]
@@ -303,20 +378,21 @@ for interval_idx = 1:length(time_intervals)-1
         zeros(unified_state_space_dimension, unified_state_space_dimension, history_size)
     history_times = [end_time + dt * (idx - history_size) for idx = 1:history_size]
 
+    # plot from now to the end of the simulation
     num_plot_points = ceil(Int, (end_time - begin_time) / dt)
     plot_sample_means = zeros(unified_state_space_dimension, num_plot_points)
     plot_sample_covs_unscaled =
         zeros(unified_state_space_dimension, unified_state_space_dimension, num_plot_points)
     plot_times = LinRange(begin_time, end_time, num_plot_points)
 
+    mean_record[:, 1+(interval_idx-1)*ceil(Int, sample_dt / dt):end, interval_idx:end] .=
+        0.0
 
-    for sample_idx = 1:num_samples
+    for sample_idx in ProgressBar(1:num_samples)
 
-        if sample_idx % 100 == 0
-            println(interval_idx, " ::: ", sample_idx)
-        end
-
-        prediction, history_samp = get_prediction(begin_time, end_time, prior)
+        # previously, predict up to the end time of the interval, now change to the 
+        # end time of the total simulation
+        prediction, history_samp = get_prediction(begin_time, simulation_end_time, prior)
 
         # Welford's online algorithm for mean and covariance calculation. See Knuth Vol 2, pg 232
         for (time_idx, t) in enumerate(history_times)
@@ -357,6 +433,33 @@ for interval_idx = 1:length(time_intervals)-1
                     (sample - old_mean) * (sample - plot_sample_means[:, time_idx])'
                 ) / 2.0
         end
+
+        # Welford's online algorithm for mean and variance calculation. See Knuth Vol 2, pg 232
+        for (offset_time_idx, t) in
+            enumerate(prediction_ts[1+(interval_idx-1)*ceil(Int, sample_dt / dt):end])
+            time_idx = (interval_idx - 1) * ceil(Int, sample_dt / dt) + offset_time_idx
+            if t <= begin_time
+                sample = abs.(history_samp(t))
+            else
+                sample = abs.(prediction(t))
+            end
+
+            for future_interval_idx = interval_idx:length(time_intervals)-1
+                old_mean = copy(mean_record[:, time_idx, future_interval_idx])
+                mean_record[:, time_idx, future_interval_idx] +=
+                    (sample - mean_record[:, time_idx, future_interval_idx]) / sample_idx
+                # use variant formula (mean of two of the standard updates) to 
+                # increase symmetry in the fp error (1e-18) range
+                Σ_record_unscaled[:, :, time_idx, future_interval_idx] +=
+                    (
+                        (sample - mean_record[:, time_idx, future_interval_idx]) *
+                        (sample - old_mean)' +
+                        (sample - old_mean) *
+                        (sample - mean_record[:, time_idx, future_interval_idx])'
+                    ) / 2.0
+            end
+        end
+
     end
 
     ################################################################################
@@ -365,15 +468,15 @@ for interval_idx = 1:length(time_intervals)-1
     plot_sample_covs = plot_sample_covs_unscaled / (num_samples - 1)
 
     for component_idx = 1:state_space_dim
+        component_stdev =
+            sqrt.(max.(0.0, plot_sample_covs[component_idx, component_idx, :]))
         plot!(
             state_plts[component_idx],
             plot_times,
             plot_sample_means[component_idx, :],
             ribbon = (
-                plot_sample_means[component_idx, :] -
-                sqrt.(max.(0.0, plot_sample_covs[component_idx, component_idx, :])),
-                plot_sample_means[component_idx, :] +
-                sqrt.(max.(0.0, plot_sample_covs[component_idx, component_idx, :])),
+                min.(component_stdev, plot_sample_means[component_idx, :]),
+                component_stdev,
             ),
             fillalpha = 0.35,
             linecolor = :red,
@@ -398,15 +501,15 @@ for interval_idx = 1:length(time_intervals)-1
     println("state plot $interval_idx saved")
 
     for component_idx = state_space_dim+1:unified_state_space_dimension
+        component_stdev =
+            sqrt.(max.(0.0, plot_sample_covs[component_idx, component_idx, :]))
         plot!(
             param_plts[component_idx-state_space_dim],
             plot_times,
             plot_sample_means[component_idx, :],
             ribbon = (
-                plot_sample_means[component_idx, :] -
-                sqrt.(max.(0.0, plot_sample_covs[component_idx, component_idx, :])),
-                plot_sample_means[component_idx, :] +
-                sqrt.(max.(0.0, plot_sample_covs[component_idx, component_idx, :])),
+                min.(component_stdev, plot_sample_means[component_idx, :]),
+                component_stdev,
             ),
             fillalpha = 0.35,
             linecolor = :red,
@@ -417,6 +520,137 @@ for interval_idx = 1:length(time_intervals)-1
     plt = plot(param_plts..., layout = (1, 1), size = (300, 250))
     Plots.savefig(plt, "personalization-virt-s$interval_idx-param.pdf")
     println("param plot $interval_idx saved")
+
+    ####################
+    # plotting the Kalman update
+    
+    if interval_idx > 1
+        projection_update_plts = []
+        ymaxes = []
+
+        # plot the virtual patient trajectory
+        for idx = 1:state_space_dim
+            local subplt
+            subplt = plot(virtual_patient_trajectory, idxs = idx, lc = :black, label = "")
+
+            title!(subplt, var_meaning[idx])
+            xlabel!(subplt, L"t")
+            ylabel!(subplt, "")
+            ylims!(subplt, 0, ylims(subplt)[2])
+
+            push!(projection_update_plts, subplt)
+            push!(ymaxes, ylims(subplt)[2])
+        end
+
+        Σ_record = Σ_record_unscaled / (num_samples - 1)
+
+        # plot the previous
+        for component_idx = 1:state_space_dim
+
+            # plot previous projection
+            component_stdev =
+                sqrt.(max.(0.0, Σ_record[component_idx, component_idx, :, interval_idx-1]))
+            plot!(
+                projection_update_plts[component_idx],
+                prediction_ts,
+                mean_record[component_idx, :, interval_idx-1],
+                ribbon = (
+                    min.(component_stdev, mean_record[component_idx, :, interval_idx-1]),
+                    component_stdev,
+                ),
+                fillalpha = 0.35,
+                linecolor = :red,
+                fillcolor = :grey,
+                label = "",
+            )
+
+            if max(mean_record[component_idx, :, interval_idx-1]...) > ymaxes[component_idx]
+                ymaxes[component_idx] =
+                    1.1 * max(mean_record[component_idx, :, interval_idx-1]...)
+            end
+            ylims!(projection_update_plts[component_idx], 0, ymaxes[component_idx])
+
+            # plot measurement
+            if component_idx == sample_idx
+                plot!(
+                    projection_update_plts[component_idx],
+                    [plot_times[begin]],
+                    [virtual_patient_trajectory(plot_times[begin])[sample_idx]],
+                    seriestype = :scatter,
+                    mc = :red,
+                    label = "",
+                )
+            end
+
+            # plot new projection
+            component_stdev =
+                sqrt.(max.(0.0, Σ_record[component_idx, component_idx, :, interval_idx]))
+            plot!(
+                projection_update_plts[component_idx],
+                prediction_ts,
+                mean_record[component_idx, :, interval_idx],
+                ribbon = (
+                    min.(component_stdev, mean_record[component_idx, :, interval_idx]),
+                    component_stdev,
+                ),
+                fillalpha = 0.35,
+                linecolor = :blue,
+                fillcolor = :blue,
+                label = "",
+            )
+
+            if max(mean_record[component_idx, :, interval_idx]...) > ymaxes[component_idx]
+                ymaxes[component_idx] =
+                    1.1 * max(mean_record[component_idx, :, interval_idx]...)
+            end
+            ylims!(projection_update_plts[component_idx], 0, ymaxes[component_idx])
+
+        end
+        plt = plot(projection_update_plts..., layout = (2, 2), size = (700, 500))
+        Plots.savefig(plt, filename_prefix * "s$interval_idx-update.pdf")
+
+    end # if interval_idx > 1
+
+    ####################
+
+
+
+    h5open(filename_prefix * "data.hdf5", "r+") do fid
+        g = create_group(fid, "prediction-$interval_idx")
+
+        dset =
+            create_dataset(g, "trajectory_t", Float64, size(virtual_patient_trajectory.t))
+        write(dset, virtual_patient_trajectory.t)
+
+        virtual_patient_trajectory_u = vcat(virtual_patient_trajectory.u'...)
+        dset =
+            create_dataset(g, "trajectory_u", Float64, size(virtual_patient_trajectory_u))
+        write(dset, virtual_patient_trajectory_u)
+
+        history_t = Vector((-max_tau_T):dt:0)
+        dset = create_dataset(g, "history_t", Float64, size(history_t))
+        write(dset, history_t)
+
+        history_u = vcat([virtual_patient_history(t) for t in history_t]'...)
+        dset = create_dataset(g, "history_u", Float64, size(history_u))
+        write(dset, history_u)
+
+        dset = create_dataset(g, "prediction_ts", Float64, size(prediction_ts))
+        write(dset, prediction_ts)
+
+        dset =
+            create_dataset(g, "mean_record", Float64, size(mean_record[:, :, interval_idx]))
+        write(dset, mean_record[:, :, interval_idx])
+
+        dset = create_dataset(
+            g,
+            "sigma_record",
+            Float64,
+            size(Σ_record_unscaled[:, :, :, interval_idx]),
+        )
+        write(dset, Σ_record_unscaled[:, :, :, interval_idx])
+
+    end
 
     ################################################################################
     # Kalman updates
@@ -525,17 +759,15 @@ for interval_idx = 1:length(time_intervals)-1
         smoothed_covs[:, :, hist_idx] = pos_def_projection(smoothed_covs[:, :, hist_idx])
     end
 
-    plot_history = true
+    plot_history = false
     if plot_history
         history_plots = []
         for idx = 1:state_space_dim
+            component_stdev = sqrt.(max.(0.0, smoothed_covs[idx, idx, :]))
             subplt = plot(
                 history_times,
                 smoothed_means[idx, :],
-                ribbon = (
-                    smoothed_means[idx, :] - sqrt.(max.(0.0, smoothed_covs[idx, idx, :])),
-                    smoothed_means[idx, :] + sqrt.(max.(0.0, smoothed_covs[idx, idx, :])),
-                ),
+                ribbon = (min.(component_stdev, smoothed_means[idx, :]), component_stdev),
                 fillalpha = 0.35,
                 fc = :red,
                 lc = :red,
