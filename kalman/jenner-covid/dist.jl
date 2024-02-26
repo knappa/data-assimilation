@@ -20,5 +20,5 @@ function Distributions.rand(a::CustomNormal)
 end
 
 function surprisal(a::CustomNormal, x::Vector)
-    return (x - a.μ)' * (a.Σ \ (x - a.μ))
+    return (x - a.μ)' * (a.Σ \ (x - a.μ)) / 2.0 + logdet(a.Σ)/2 + log(2*pi) * a.dim/2
 end

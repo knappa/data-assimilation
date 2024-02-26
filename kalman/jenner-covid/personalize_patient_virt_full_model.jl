@@ -301,7 +301,7 @@ println("initial param plot saved")
 
 time_intervals = Vector(virt_patient_tspan[1]:sample_dt:virt_patient_tspan[2])
 
-for interval_idx = 1:2 # length(time_intervals)-1
+for interval_idx = 1:length(time_intervals)-1
 
     # determine the current time interval to test
     begin_time = time_intervals[interval_idx]

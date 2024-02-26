@@ -98,7 +98,7 @@ const unified_state_space_dimension = state_space_dim + length(virtual_pop_prior
 const simulation_end_time = 10.0
 const virt_patient_tspan = (0.0, simulation_end_time)
 const num_samples =
-    Integer(10 * unified_state_space_dimension * (unified_state_space_dimension - 1) / 2.0)
+    Integer(100 * unified_state_space_dimension * (unified_state_space_dimension - 1) / 2.0)
 const sample_dt = 1 # probably should be multiple of dt
 const sample_idx = 1
 
@@ -136,7 +136,7 @@ function compute_numerical_jacobian(
 )
     const_params = (sird_noise, state_var_noise, param_noise)
     history_interpolated(p, t; idxs = nothing) =
-        abs.(sampled_history_interpolated(p, t; idxs = idxs))
+        max.(0.0, sampled_history_interpolated(p, t; idxs = idxs))
     J = zeros(unified_state_space_dimension, unified_state_space_dimension)
 
     for component_idx in eachindex(initial_condition)
@@ -152,7 +152,7 @@ function compute_numerical_jacobian(
         dde_prob_ic = remake(
             dde_prob;
             tspan = (t_0, t_1),
-            u0 = abs.(ic_plus),
+            u0 = max.(0.0, ic_plus),
             h = history_interpolated,
             p = const_params,
         )
@@ -171,7 +171,7 @@ function compute_numerical_jacobian(
         dde_prob_ic = remake(
             dde_prob;
             tspan = (t_0, t_1),
-            u0 = abs.(ic_minus),
+            u0 = max.(0.0, ic_minus),
             h = history_interpolated,
             p = const_params,
         )
@@ -199,7 +199,7 @@ function get_prediction(begin_time, end_time, prior)
 
     while true
 
-        history_sample_arr = hcat([abs.(rand(prior[idx])) for idx = 1:history_size]...)
+        history_sample_arr = hcat([max.(0.0, rand(prior[idx])) for idx = 1:history_size]...)
 
         history_interpolator = BasicInterpolators.LinearInterpolator(
             ts,
@@ -236,8 +236,6 @@ function get_prediction(begin_time, end_time, prior)
                 sdde_alg,
                 alg_hints = [:stiff],
                 saveat = dt,
-                # abstol = 1e-1, # 1e-9,
-                # reltol = 1e-1, # standard
                 isoutofdomain = (u, p, t) -> (any(u .< 0.0)),
             )
         else
@@ -397,9 +395,9 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
         # Welford's online algorithm for mean and covariance calculation. See Knuth Vol 2, pg 232
         for (time_idx, t) in enumerate(history_times)
             if t <= begin_time
-                sample = abs.(history_samp(t))
+                sample = max.(0.0, history_samp(t))
             else
-                sample = abs.(prediction(t))
+                sample = max.(0.0, prediction(t))
             end
 
             old_mean = copy(history_sample_means[:, time_idx])
@@ -417,9 +415,9 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
         # Welford's online algorithm for mean and variance calculation. See Knuth Vol 2, pg 232
         for (time_idx, t) in enumerate(plot_times)
             if t <= begin_time
-                sample = abs.(history_samp(t))
+                sample = max.(0.0, history_samp(t))
             else
-                sample = abs.(prediction(t))
+                sample = max.(0.0, prediction(t))
             end
 
             old_mean = copy(plot_sample_means[:, time_idx])
@@ -439,9 +437,9 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
             enumerate(prediction_ts[1+(interval_idx-1)*ceil(Int, sample_dt / dt):end])
             time_idx = (interval_idx - 1) * ceil(Int, sample_dt / dt) + offset_time_idx
             if t <= begin_time
-                sample = abs.(history_samp(t))
+                sample = max.(0.0, history_samp(t))
             else
-                sample = abs.(prediction(t))
+                sample = max.(0.0, prediction(t))
             end
 
             for future_interval_idx = interval_idx:length(time_intervals)-1
@@ -523,7 +521,7 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
 
     ####################
     # plotting the Kalman update
-    
+
     if interval_idx > 1
         projection_update_plts = []
         ymaxes = []
@@ -611,29 +609,14 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
 
     end # if interval_idx > 1
 
-    ####################
-
-
+    ################################################################################
+    # record the prediciton
 
     h5open(filename_prefix * "data.hdf5", "r+") do fid
         g = create_group(fid, "prediction-$interval_idx")
 
-        dset =
-            create_dataset(g, "trajectory_t", Float64, size(virtual_patient_trajectory.t))
-        write(dset, virtual_patient_trajectory.t)
-
-        virtual_patient_trajectory_u = vcat(virtual_patient_trajectory.u'...)
-        dset =
-            create_dataset(g, "trajectory_u", Float64, size(virtual_patient_trajectory_u))
-        write(dset, virtual_patient_trajectory_u)
-
-        history_t = Vector((-max_tau_T):dt:0)
-        dset = create_dataset(g, "history_t", Float64, size(history_t))
-        write(dset, history_t)
-
-        history_u = vcat([virtual_patient_history(t) for t in history_t]'...)
-        dset = create_dataset(g, "history_u", Float64, size(history_u))
-        write(dset, history_u)
+        dset = create_dataset(g, "begin_time", Float64, 1)
+        write(dset, begin_time)
 
         dset = create_dataset(g, "prediction_ts", Float64, size(prediction_ts))
         write(dset, prediction_ts)
@@ -648,7 +631,31 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
             Float64,
             size(Σ_record_unscaled[:, :, :, interval_idx]),
         )
-        write(dset, Σ_record_unscaled[:, :, :, interval_idx])
+        write(dset, Σ_record_unscaled[:, :, :, interval_idx] / (num_samples - 1))
+
+    end
+
+    ################################################################################
+    # compute surprisals and record
+
+    h5open(filename_prefix * "data.hdf5", "r+") do fid
+
+        δ =
+            hcat(virtual_patient_trajectory(prediction_ts).u...) -
+            mean_record[:, :, interval_idx]
+        Σs = Σ_record_unscaled[:, :, :, interval_idx] / (num_samples - 1)
+        surprisal_series = zeros(size(mean_record)[2])
+        for idx = 1:size(means)[2]
+            surprisal_series[idx] =
+                δ[:, idx]' * pinv(Σs[:, :, idx]) * δ[:, idx] / 2.0 + # TODO: replace pinv
+                logdet(Σs[:, :, idx]) / 2.0 +
+                unified_state_space_dimension * log(2 * pi) / 2.0
+        end
+
+        g = open_group(fid, "prediction-$interval_idx")
+
+        dset = create_dataset(g, "prediction_surprisal", Float64, size(surprisal_series))
+        write(dset, surprisal_series)
 
     end
 
@@ -686,6 +693,29 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
     smoothed_covs[:, :, end] = Symmetric(history_sample_covs[:, :, end] - K * S * K')
     smoothed_covs[:, :, end] = pos_def_projection(smoothed_covs[:, :, end])
 
+    # record the kalman matrices
+    h5open(filename_prefix * "data.hdf5", "r+") do fid
+        g = open_group(fid, "prediction-$interval_idx")
+
+        dset = create_dataset(g, "H", Float64, size(H))
+        write(dset, Matrix(H))
+
+        dset = create_dataset(g, "R", Float64, size(R))
+        write(dset, R)
+
+        dset = create_dataset(g, "Q", Float64, size(Q))
+        write(dset, Q)
+
+        dset = create_dataset(g, "S", Float64, size(S))
+        write(dset, S)
+
+        dset = create_dataset(g, "K", Float64, size(K))
+        write(dset, K)
+
+        dset = create_dataset(g, "v", Float64, size(v))
+        write(dset, v)
+
+    end
 
     # create an interpolator for history, used in the compuation of the numerical 
     # jacobian. This just uses the means, avoiding stochasticity. (which the numerical
@@ -698,7 +728,7 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
         function hist_interpolated(p, t; idxs = nothing)
             t = max(t, min_time)
             t = min(t, max_time)
-            history_eval = abs.(hist_interpolator(t))
+            history_eval = max.(0.0, hist_interpolator(t))
             if typeof(idxs) <: Number
                 return history_eval[idxs]
             else
@@ -733,7 +763,7 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
                 pinv(A * history_sample_covs[:, :, hist_idx] * A' + Q)
 
             smoothed_means[:, hist_idx] =
-                abs.(
+                max.(0.0, 
                     history_sample_means[:, hist_idx] +
                     G *
                     (smoothed_means[:, hist_idx+1] - A * history_sample_means[:, hist_idx])
@@ -778,24 +808,49 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
         end
         local plt
         plt = plot(history_plots..., layout = (2, 2), size = (700, 500))
-        Plots.savefig(plt, "personalization-virt-s$interval_idx-state-hist.pdf")
+        Plots.savefig(plt, filename_prefix * "virt-s$interval_idx-state-hist.pdf")
         # println("state plot $interval_idx saved")
     end
 
+    ################################################################################
+    # compute surprisals and record
+
+    h5open(filename_prefix * "data.hdf5", "r+") do fid
+
+        δ =
+            hcat(virtual_patient_trajectory(prediction_ts).u...) -
+            smoothed_means
+        surprisal_series = zeros(size(mean_record)[2])
+        for idx = 1:size(means)[2]
+            surprisal_series[idx] =
+                δ[:, idx]' * pinv(smoothed_covs[:, :, idx]) * δ[:, idx] / 2.0 + # TODO: replace pinv
+                logdet(smoothed_covs[:, :, idx]) / 2.0 +
+                unified_state_space_dimension * log(2 * pi) / 2.0
+        end
+
+        g = open_group(fid, "prediction-$interval_idx")
+
+        dset = create_dataset(g, "updated_surprisal", Float64, size(surprisal_series))
+        write(dset, surprisal_series)
+
+    end
+
+    ################################################################################
     # copy for next round
     means .= smoothed_means
     prior_Σs .= smoothed_covs
 
-    JLD2.save(
-        "kalman-update-$interval_idx.jld2",
-        Dict("means" => means, "prior_Σs" => prior_Σs),
-    )
+    # record the updated distributions
+    h5open(filename_prefix * "data.hdf5", "r+") do fid
+        g = open_group(fid, "prediction-$interval_idx")
 
-    fid = h5open("kalman-update-$interval_idx.hdf5", "w")
-    fid["mean"] = means
-    fid["cov"] = prior_Σs
-    close(fid)
+        dset = create_dataset(g, "posterior_means", Float64, size(means))
+        write(dset, means)
 
+        dset = create_dataset(g, "posterior_covs", Float64, size(prior_Σs))
+        write(dset, prior_Σs)
+
+    end
 
     ################################################################################
 
