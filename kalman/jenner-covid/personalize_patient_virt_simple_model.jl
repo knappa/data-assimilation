@@ -914,16 +914,7 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
                 history_times[hist_idx],
                 history_times[hist_idx+1],
             )
-            println()
-            println("A")
-            println(A)
-            println("hsc")
-            println(history_sample_covs[:, :, hist_idx])
-            temp = A * history_sample_covs[:, :, hist_idx] * A' + Q
 
-            println("temp")
-            println(temp)
-            println()
             G =
                 history_sample_covs[:, :, hist_idx] *
                 A' *
