@@ -17,7 +17,7 @@ using ProgressBars
 function transform(v; idx = nothing)
     if typeof(idx) <: Number
         if idx == 2
-            return log.(-1 .+ max.(1 + 1e-15, exp.(v)))
+            return log.(max.(1e-15, expm1.(v)))
         elseif idx == 4
             return v .* 100
         else
@@ -26,7 +26,7 @@ function transform(v; idx = nothing)
     else
         w = copy(v)
         # w[2,:] = log.(max.(1e-300,v[2,:]))
-        w[2, :] = log.(-1 .+ max.(1 + 1e-15, exp.(v[2, :])))
+        w[2, :] = log.(max.(1e-15, expm1.(v[2, :])))
         w[4, :] = v[4, :] .* 100
         return w
     end
@@ -35,7 +35,7 @@ end
 function inv_transform(v; idx = nothing)
     if typeof(idx) <: Number
         if idx == 2
-            return log.(1 .+ exp.(v))
+            return log1p.(exp.(v))
         elseif idx == 4
             return v ./ 100
         else
@@ -44,7 +44,7 @@ function inv_transform(v; idx = nothing)
     else
         w = max.(0.0, v)
         # w[2,:] = exp.(v[2,:])
-        w[2, :] = log.(1 .+ exp.(v[2, :]))
+        w[2, :] = log1p.(exp.(v[2, :]))
         w[4, :] = v[4, :] ./ 100
         return w
     end
@@ -632,7 +632,6 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
 
     end
 
-
     ################################################################################
     # Kalman updates
 
@@ -751,6 +750,7 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
 
             smoothed_covs[:, :, hist_idx] =
                 pos_def_projection(smoothed_covs[:, :, hist_idx])
+
         end
     end
 
