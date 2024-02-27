@@ -11,15 +11,24 @@ import SciMLBase
 using HDF5
 using ArgParse
 using ProgressBars
+import Logging
+
+Logging.disable_logging(Logging.Error) # no logs of severity < error
 
 ################################################################################
 
 function transform(v; idx = nothing)
     if typeof(idx) <: Number
-        if idx == 2
+        if idx == 1
+            return v
+        elseif idx == 2
             return log.(max.(1e-15, expm1.(v)))
+        elseif idx == 3
+            return v
         elseif idx == 4
             return v .* 100
+        elseif idx == 5
+            return v
         else
             return v
         end
@@ -27,25 +36,35 @@ function transform(v; idx = nothing)
         w = copy(v)
         # w[2,:] = log.(max.(1e-300,v[2,:]))
         w[2, :] = log.(max.(1e-15, expm1.(v[2, :])))
+        # w[3, :] = v[3, :] .* 100
         w[4, :] = v[4, :] .* 100
+        # w[5, :] = log.(v[5, :])
         return w
     end
 end
 
 function inv_transform(v; idx = nothing)
     if typeof(idx) <: Number
-        if idx == 2
+        if idx == 1
+            return v
+        elseif idx == 2
             return log1p.(exp.(v))
+        elseif idx == 3
+            return v
         elseif idx == 4
             return v ./ 100
+        elseif idx == 5
+            return v
         else
             return v
         end
     else
-        w = max.(0.0, v)
+        w = copy(v)
         # w[2,:] = exp.(v[2,:])
         w[2, :] = log1p.(exp.(v[2, :]))
+        # w[3, :] = v[3, :] ./ 100
         w[4, :] = v[4, :] ./ 100
+        # w[5, :] = exp.(v[5, :])
         return w
     end
 end
@@ -205,6 +224,8 @@ h5open(filename_prefix * "data.hdf5", "w") do fid
 end
 
 ################################################################################
+
+local plt
 
 state_plts = []
 for idx = 1:state_space_dim
@@ -435,7 +456,7 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
         plot!(
             param_plts[component_idx-state_space_dim],
             plot_times,
-            plot_sample_means[component_idx, :],
+            mid,
             ribbon = (mid - lower, upper - mid),
             fillalpha = 0.35,
             linecolor = :red,
