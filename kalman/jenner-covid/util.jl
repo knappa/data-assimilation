@@ -6,13 +6,24 @@ function pos_def_projection(
     eigenvalue_max = 1e4,
 )
 
+    # sanitize
+    M = copy(M)
+    M[isnan.(M)] .= 0.0
+    M[M.>1e10] .= 1e10
+    M[M.<-1e10] .= -1e10
+
     evals, evecs = LinearAlgebra.eigen(Symmetric(M))
     if minimum(evals) <= eigenvalue_epsilon
-        M = Symmetric(
-            evecs *
-            LinearAlgebra.diagm(min.(eigenvalue_max, max.(eigenvalue_epsilon, evals))) *
-            evecs',
-        )
+        M =
+            real.(
+                Symmetric(
+                    evecs *
+                    LinearAlgebra.diagm(
+                        min.(eigenvalue_max, max.(eigenvalue_epsilon, evals)),
+                    ) *
+                    evecs',
+                )
+            )
     end
 
     # U, S, V = svd(Symmetric(M))
