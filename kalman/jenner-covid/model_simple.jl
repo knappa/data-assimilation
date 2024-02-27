@@ -14,16 +14,12 @@ var_meaning = [  # py/matlab index (julia index=matlab index)
 include("model_constants.jl")
 
 # tau_T = 4.5 and this is more than twice that, which will have to be sufficient
-const max_tau_T = 10.0 
+const max_tau_T = 10.0
 
 ################################################################################
 
 function covid_model(dy, y, history, p, t)
-    V,
-    S,
-    I,
-    D,
-    beta, = y
+    V, S, I, D, beta, = y
 
     V_lag1 = history(p, t - tau_I; idxs = 1) # y_delay[..., 0, 0]
     S_lag1 = history(p, t - tau_I; idxs = 2) # y_delay[..., 1, 0]
@@ -42,13 +38,10 @@ function covid_model(dy, y, history, p, t)
     end
 
     dy[1] = phat * I - d_V_spec * V
-    dy[2] =
-        lam_S * (1 - (S + I + D) / Smax) * S - beta * S * V
-    dy[3] =
-        beta * S_lag1 * V_lag1 - d_I * I 
-    dy[4] =
-        d_I * I - d_D * D 
-    
+    dy[2] = lam_S * (1 - (S + I + D) / Smax) * S - beta * S * V
+    dy[3] = beta * S_lag1 * V_lag1 - d_I * I
+    dy[4] = d_I * I - d_D * D
+
     # dynamic parameters have no non-random dynamics
     dy[5:end] .= 0.0
 
@@ -56,11 +49,7 @@ function covid_model(dy, y, history, p, t)
 end
 
 function history_maker(initial_conditions)
-    V_ic,
-    S_ic,
-    I_ic,
-    D_ic,
-    beta_ic = initial_conditions
+    V_ic, S_ic, I_ic, D_ic, beta_ic = initial_conditions
 
     function history(p, t; idxs = nothing)
         if typeof(idxs) <: Number
@@ -76,13 +65,7 @@ function history_maker(initial_conditions)
                 beta_ic
             end
         else
-            [
-                V_ic,
-                S_ic,
-                I_ic,
-                D_ic,
-                beta_ic,
-            ]
+            [V_ic, S_ic, I_ic, D_ic, beta_ic]
         end
     end
     return history
@@ -101,13 +84,7 @@ constant_lags = [tau_I]
 # parameter ics
 beta_0 = beta
 
-history = history_maker([
-    V0,
-    S0,
-    I0,
-    D0,
-    beta_0,
-])
+history = history_maker([V0, S0, I0, D0, beta_0])
 
 ################################################################################
 
