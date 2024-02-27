@@ -17,7 +17,7 @@ using ProgressBars
 function transform(v; idx = nothing)
     if typeof(idx) <: Number
         if idx == 2
-            return log.(-1 .+ max.(1 + 1e-15, exp.(v)))
+            return log.(max.(1e-15, expm1.(v)))
         elseif idx == 4
             return v .* 100
         else
@@ -26,7 +26,7 @@ function transform(v; idx = nothing)
     else
         w = copy(v)
         # w[2,:] = log.(max.(1e-300,v[2,:]))
-        w[2, :] = log.(-1 .+ max.(1 + 1e-15, exp.(v[2, :])))
+        w[2, :] = log.(max.(1e-15, expm1.(v[2, :])))
         w[4, :] = v[4, :] .* 100
         return w
     end
@@ -35,7 +35,7 @@ end
 function inv_transform(v; idx = nothing)
     if typeof(idx) <: Number
         if idx == 2
-            return log.(1 .+ exp.(v))
+            return log1p.(exp.(v))
         elseif idx == 4
             return v ./ 100
         else
@@ -44,7 +44,7 @@ function inv_transform(v; idx = nothing)
     else
         w = max.(0.0, v)
         # w[2,:] = exp.(v[2,:])
-        w[2, :] = log.(1 .+ exp.(v[2, :]))
+        w[2, :] = log1p.(exp.(v[2, :]))
         w[4, :] = v[4, :] ./ 100
         return w
     end
@@ -167,195 +167,8 @@ prior_Σs[state_space_dim+1:end, state_space_dim+1:end, :] .=
 
 ################################################################################
 
-function compute_numerical_jacobian(
-    initial_condition,
-    sampled_history_interpolated,
-    t_0,
-    t_1,
-)
-    const_params = (sird_noise, state_var_noise, param_noise)
-    history_interpolated(p, t; idxs = nothing) =
-        sampled_history_interpolated(p, t; idxs = idxs)
-    J = zeros(unified_state_space_dimension, unified_state_space_dimension)
-
-    initial_condition = inv_transform(initial_condition)
-
-    for component_idx in eachindex(initial_condition)
-
-        # ensure that +/- h never sends us negative
-        h = min(0.1, initial_condition[component_idx] / 2.0)
-        if (h == 0.0) | issubnormal(h)
-            continue
-        end
-
-        ic_plus = copy(initial_condition)
-        ic_plus[component_idx] += h
-        dde_prob_ic = remake(
-            dde_prob;
-            tspan = (t_0, t_1),
-            u0 = ic_plus,
-            h = history_interpolated,
-            p = const_params,
-        )
-        plus_prediction = solve(
-            dde_prob_ic,
-            dde_alg,
-            alg_hints = [:stiff],
-            saveat = [t_0, t_1],
-            isoutofdomain = (u, p, t) -> (any(u .< 0.0)),
-        )(
-            t_1,
-        )
-
-        ic_minus = copy(initial_condition)
-        ic_minus[component_idx] -= h
-        dde_prob_ic = remake(
-            dde_prob;
-            tspan = (t_0, t_1),
-            u0 = ic_minus,
-            h = history_interpolated,
-            p = const_params,
-        )
-        minus_prediction = solve(
-            dde_prob_ic,
-            dde_alg,
-            alg_hints = [:stiff],
-            saveat = [t_0, t_1],
-            isoutofdomain = (u, p, t) -> (any(u .< 0.0)),
-        )(
-            t_1,
-        )
-
-        nan_on_plus = any(isnan.(plus_prediction))
-        nan_on_minus = any(isnan.(minus_prediction))
-        if nan_on_plus & nan_on_minus
-            # can't compute, use default
-            J[component_idx, :] .= 0.0
-        elseif nan_on_plus | nan_on_minus
-
-            # compute one sided derivative
-            dde_prob_ic = remake(
-                dde_prob;
-                tspan = (t_0, t_1),
-                u0 = initial_condition,
-                h = history_interpolated,
-                p = const_params,
-            )
-            zero_prediction = solve(
-                dde_prob_ic,
-                dde_alg,
-                alg_hints = [:stiff],
-                saveat = [t_0, t_1],
-                isoutofdomain = (u, p, t) -> (any(u .< 0.0)),
-            )(
-                t_1,
-            )
-
-            if any(isnan.(zero_prediction))
-                # can't compute, use default
-                J[component_idx, :] .= 0.0
-            elseif nan_on_plus
-                J[component_idx, :] = (zero_prediction - minus_prediction) / h
-            elseif nan_on_minus
-                J[component_idx, :] = (plus_prediction - zero_prediction) / h
-            end
-
-        else
-            # both plus and minus predictions are fine, compute the two sided derivative
-            J[component_idx, :] = (plus_prediction - minus_prediction) / (2 * h)
-        end
-    end
-
-    return J
-end
-
-################################################################################
-
-function get_prediction(begin_time, end_time, prior)
-    # create history: first index is final time
-    ts = [begin_time + dt * (idx - history_size) for idx = 1:history_size]
-
-    while true
-
-        history_sample_arr =
-            inv_transform(hcat([rand(prior[idx]) for idx = 1:history_size]...))
-
-        history_interpolator = BasicInterpolators.LinearInterpolator(
-            ts,
-            eachcol(history_sample_arr),
-            BasicInterpolators.NoBoundaries(),
-        )
-
-        function history_sample(p, t; idxs = nothing)
-            history_eval = history_interpolator(t)
-            if typeof(idxs) <: Number
-                return history_eval[idxs]
-            else
-                return history_eval
-            end
-        end
-
-        initial_condition = history_sample_arr[:, end]
-        # tau_T_samp <= max_tau_T
-        # initial_condition[end] = min(max_tau_T, initial_condition[end])
-
-        const_params = (sird_noise, state_var_noise, param_noise)
-
-        stochastic_solutions = true
-        if stochastic_solutions
-            sdde_prob_ic = remake(
-                sdde_prob;
-                tspan = (begin_time, end_time),
-                u0 = initial_condition,
-                h = history_sample,
-                p = const_params,
-            )
-            prediction = solve(
-                sdde_prob_ic,
-                sdde_alg,
-                alg_hints = [:stiff],
-                saveat = dt,
-                isoutofdomain = (u, p, t) -> (any(u .< 0.0)),
-            )
-        else
-            dde_prob_ic = remake(
-                dde_prob;
-                tspan = (begin_time, end_time),
-                u0 = initial_condition,
-                h = history_sample,
-                p = const_params,
-            )
-            prediction = solve(
-                dde_prob_ic,
-                dde_alg,
-                alg_hints = [:stiff],
-                saveat = dt,
-                isoutofdomain = (u, p, t) -> (any(u .< 0.0)),
-            )
-        end
-
-        if !SciMLBase.successful_retcode(prediction)
-            continue
-        end
-
-        if any(isnan.(hcat(prediction.u...))) | any(isinf.(hcat(prediction.u...)))
-            continue
-        end
-
-        if minimum(hcat(prediction.u...)) >= 0.0
-
-            # virtual_population_loss = covid_minimizing_fun_severe(prediction)
-            # accept = rand() <= exp(-virtual_population_loss)
-            accept = true
-            if accept
-                return prediction, t -> history_sample(p, t; idxs = nothing)
-            else
-                println(exp(-virtual_population_loss))
-            end
-        end
-        # otherwise go again
-    end
-end # get_prediction
+include("compute_jacobian.jl")
+include("get_prediction.jl")
 
 ################################################################################
 
@@ -599,7 +412,7 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
 
     end
     plt = plot(state_plts..., layout = (2, 2), size = (700, 500))
-    Plots.savefig(plt, "personalization-virt-s$interval_idx-state.pdf")
+    Plots.savefig(plt, filename_prefix * "s$interval_idx-state.pdf")
     println("state plot $interval_idx saved")
 
     for component_idx = state_space_dim+1:unified_state_space_dimension
@@ -631,7 +444,7 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
         )
     end
     plt = plot(param_plts..., layout = (1, 1), size = (300, 250))
-    Plots.savefig(plt, "personalization-virt-s$interval_idx-param.pdf")
+    Plots.savefig(plt, filename_prefix * "s$interval_idx-param.pdf")
     println("param plot $interval_idx saved")
 
     ####################
@@ -924,7 +737,6 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
                 history_sample_means[:, hist_idx] +
                 G * (smoothed_means[:, hist_idx+1] - A * history_sample_means[:, hist_idx])
 
-
             smoothed_covs[:, :, hist_idx] =
                 history_sample_covs[:, :, hist_idx] +
                 G *
@@ -943,29 +755,6 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
     # numerical cleanup b/c julia is persnickety
     for hist_idx = 1:history_size
         smoothed_covs[:, :, hist_idx] = pos_def_projection(smoothed_covs[:, :, hist_idx])
-    end
-
-    plot_history = false
-    if plot_history
-        history_plots = []
-        for idx = 1:state_space_dim
-            component_stdev = sqrt.(max.(0.0, smoothed_covs[idx, idx, :]))
-            subplt = plot(
-                history_times,
-                smoothed_means[idx, :],
-                ribbon = (min.(component_stdev, smoothed_means[idx, :]), component_stdev),
-                fillalpha = 0.35,
-                fc = :red,
-                lc = :red,
-                label = "",
-            )
-            push!(history_plots, subplt)
-
-        end
-        local plt
-        plt = plot(history_plots..., layout = (2, 2), size = (700, 500))
-        Plots.savefig(plt, filename_prefix * "virt-s$interval_idx-state-hist.pdf")
-        # println("state plot $interval_idx saved")
     end
 
     ################################################################################
