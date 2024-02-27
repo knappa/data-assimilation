@@ -12,6 +12,43 @@ using HDF5
 using ArgParse
 using ProgressBars
 
+################################################################################
+
+function transform(v; idx = nothing)
+    if typeof(idx) <: Number
+        if idx == 2
+            return log.(-1 .+ max.(1 + 1e-15, exp.(v)))
+        elseif idx == 4
+            return v .* 100
+        else
+            return v
+        end
+    else
+        w = copy(v)
+        # w[2,:] = log.(max.(1e-300,v[2,:]))
+        w[2, :] = log.(-1 .+ max.(1 + 1e-15, exp.(v[2, :])))
+        w[4, :] = v[4, :] .* 100
+        return w
+    end
+end
+
+function inv_transform(v; idx = nothing)
+    if typeof(idx) <: Number
+        if idx == 2
+            return log.(1 .+ exp.(v))
+        elseif idx == 4
+            return v ./ 100
+        else
+            return v
+        end
+    else
+        w = max.(0.0, v)
+        # w[2,:] = exp.(v[2,:])
+        w[2, :] = log.(1 .+ exp.(v[2, :]))
+        w[4, :] = v[4, :] ./ 100
+        return w
+    end
+end
 
 ################################################################################
 # command line parameters
@@ -114,6 +151,8 @@ means[1, end] = virtual_pop_prior_mean[1] # only last mean gets the virus
 means[2:state_space_dim, :] .= initial_condition_state[2:end]
 means[state_space_dim+1:end, :] .= virtual_pop_prior_mean[2:end]
 
+means = transform(means)
+
 # create the historical covariance matrices
 prior_Σs = zeros(unified_state_space_dimension, unified_state_space_dimension, history_size)
 prior_Σs[2:state_space_dim, 2:state_space_dim, :] .=
@@ -136,8 +175,10 @@ function compute_numerical_jacobian(
 )
     const_params = (sird_noise, state_var_noise, param_noise)
     history_interpolated(p, t; idxs = nothing) =
-        max.(0.0, sampled_history_interpolated(p, t; idxs = idxs))
+        sampled_history_interpolated(p, t; idxs = idxs)
     J = zeros(unified_state_space_dimension, unified_state_space_dimension)
+
+    initial_condition = inv_transform(initial_condition)
 
     for component_idx in eachindex(initial_condition)
 
@@ -152,7 +193,7 @@ function compute_numerical_jacobian(
         dde_prob_ic = remake(
             dde_prob;
             tspan = (t_0, t_1),
-            u0 = max.(0.0, ic_plus),
+            u0 = ic_plus,
             h = history_interpolated,
             p = const_params,
         )
@@ -171,7 +212,7 @@ function compute_numerical_jacobian(
         dde_prob_ic = remake(
             dde_prob;
             tspan = (t_0, t_1),
-            u0 = max.(0.0, ic_minus),
+            u0 = ic_minus,
             h = history_interpolated,
             p = const_params,
         )
@@ -185,7 +226,44 @@ function compute_numerical_jacobian(
             t_1,
         )
 
-        J[component_idx, :] = (plus_prediction - minus_prediction) / (2 * h)
+        nan_on_plus = any(isnan.(plus_prediction))
+        nan_on_minus = any(isnan.(minus_prediction))
+        if nan_on_plus & nan_on_minus
+            # can't compute, use default
+            J[component_idx, :] .= 0.0
+        elseif nan_on_plus | nan_on_minus
+
+            # compute one sided derivative
+            dde_prob_ic = remake(
+                dde_prob;
+                tspan = (t_0, t_1),
+                u0 = initial_condition,
+                h = history_interpolated,
+                p = const_params,
+            )
+            zero_prediction = solve(
+                dde_prob_ic,
+                dde_alg,
+                alg_hints = [:stiff],
+                saveat = [t_0, t_1],
+                isoutofdomain = (u, p, t) -> (any(u .< 0.0)),
+            )(
+                t_1,
+            )
+
+            if any(isnan.(zero_prediction))
+                # can't compute, use default
+                J[component_idx, :] .= 0.0
+            elseif nan_on_plus
+                J[component_idx, :] = (zero_prediction - minus_prediction) / h
+            elseif nan_on_minus
+                J[component_idx, :] = (plus_prediction - zero_prediction) / h
+            end
+
+        else
+            # both plus and minus predictions are fine, compute the two sided derivative
+            J[component_idx, :] = (plus_prediction - minus_prediction) / (2 * h)
+        end
     end
 
     return J
@@ -199,7 +277,8 @@ function get_prediction(begin_time, end_time, prior)
 
     while true
 
-        history_sample_arr = hcat([max.(0.0, rand(prior[idx])) for idx = 1:history_size]...)
+        history_sample_arr =
+            inv_transform(hcat([rand(prior[idx]) for idx = 1:history_size]...))
 
         history_interpolator = BasicInterpolators.LinearInterpolator(
             ts,
@@ -218,7 +297,7 @@ function get_prediction(begin_time, end_time, prior)
 
         initial_condition = history_sample_arr[:, end]
         # tau_T_samp <= max_tau_T
-        initial_condition[end] = min(max_tau_T, initial_condition[end])
+        # initial_condition[end] = min(max_tau_T, initial_condition[end])
 
         const_params = (sird_noise, state_var_noise, param_noise)
 
@@ -395,9 +474,9 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
         # Welford's online algorithm for mean and covariance calculation. See Knuth Vol 2, pg 232
         for (time_idx, t) in enumerate(history_times)
             if t <= begin_time
-                sample = max.(0.0, history_samp(t))
+                sample = transform(history_samp(t))
             else
-                sample = max.(0.0, prediction(t))
+                sample = transform(prediction(t))
             end
 
             old_mean = copy(history_sample_means[:, time_idx])
@@ -415,9 +494,9 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
         # Welford's online algorithm for mean and variance calculation. See Knuth Vol 2, pg 232
         for (time_idx, t) in enumerate(plot_times)
             if t <= begin_time
-                sample = max.(0.0, history_samp(t))
+                sample = transform(history_samp(t))
             else
-                sample = max.(0.0, prediction(t))
+                sample = transform(prediction(t))
             end
 
             old_mean = copy(plot_sample_means[:, time_idx])
@@ -437,9 +516,9 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
             enumerate(prediction_ts[1+(interval_idx-1)*ceil(Int, sample_dt / dt):end])
             time_idx = (interval_idx - 1) * ceil(Int, sample_dt / dt) + offset_time_idx
             if t <= begin_time
-                sample = max.(0.0, history_samp(t))
+                sample = transform(history_samp(t))
             else
-                sample = max.(0.0, prediction(t))
+                sample = transform(prediction(t))
             end
 
             for future_interval_idx = interval_idx:length(time_intervals)-1
@@ -468,19 +547,44 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
     for component_idx = 1:state_space_dim
         component_stdev =
             sqrt.(max.(0.0, plot_sample_covs[component_idx, component_idx, :]))
+
+        upper = inv_transform(
+            plot_sample_means[component_idx, :] + component_stdev;
+            idx = component_idx,
+        )
+        mid = inv_transform(plot_sample_means[component_idx, :]; idx = component_idx)
+        lower =
+            max.(
+                0.0,
+                inv_transform(
+                    plot_sample_means[component_idx, :] - component_stdev;
+                    idx = component_idx,
+                ),
+            )
+
         plot!(
             state_plts[component_idx],
             plot_times,
-            plot_sample_means[component_idx, :],
-            ribbon = (
-                min.(component_stdev, plot_sample_means[component_idx, :]),
-                component_stdev,
-            ),
+            mid,
+            ribbon = (mid - lower, upper - mid),
             fillalpha = 0.35,
             linecolor = :red,
             fillcolor = :grey,
             label = "",
         )
+        if component_idx == 2
+            ylims!(
+                state_plts[component_idx],
+                0,
+                min(ylims(state_plts[component_idx])[2], 0.2),
+            )
+        elseif component_idx == 4
+            ylims!(
+                state_plts[component_idx],
+                0,
+                min(ylims(state_plts[component_idx])[2], 0.02),
+            )
+        end
 
         if component_idx == sample_idx
             plot!(
@@ -501,14 +605,25 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
     for component_idx = state_space_dim+1:unified_state_space_dimension
         component_stdev =
             sqrt.(max.(0.0, plot_sample_covs[component_idx, component_idx, :]))
+        upper = inv_transform(
+            plot_sample_means[component_idx, :] + component_stdev;
+            idx = component_idx,
+        )
+        mid = inv_transform(plot_sample_means[component_idx, :]; idx = component_idx)
+        lower =
+            max.(
+                0.0,
+                inv_transform(
+                    plot_sample_means[component_idx, :] - component_stdev;
+                    idx = component_idx,
+                ),
+            )
+
         plot!(
             param_plts[component_idx-state_space_dim],
             plot_times,
             plot_sample_means[component_idx, :],
-            ribbon = (
-                min.(component_stdev, plot_sample_means[component_idx, :]),
-                component_stdev,
-            ),
+            ribbon = (mid - lower, upper - mid),
             fillalpha = 0.35,
             linecolor = :red,
             fillcolor = :grey,
@@ -548,14 +663,30 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
             # plot previous projection
             component_stdev =
                 sqrt.(max.(0.0, Σ_record[component_idx, component_idx, :, interval_idx-1]))
+
+            upper = inv_transform(
+                mean_record[component_idx, :, interval_idx-1] + component_stdev;
+                idx = component_idx,
+            )
+            mid = inv_transform(
+                mean_record[component_idx, :, interval_idx-1];
+                idx = component_idx,
+            )
+            lower =
+                max.(
+                    0.0,
+                    inv_transform(
+                        mean_record[component_idx, :, interval_idx-1] - component_stdev;
+                        idx = component_idx,
+                    ),
+                )
+
+
             plot!(
                 projection_update_plts[component_idx],
                 prediction_ts,
-                mean_record[component_idx, :, interval_idx-1],
-                ribbon = (
-                    min.(component_stdev, mean_record[component_idx, :, interval_idx-1]),
-                    component_stdev,
-                ),
+                mid,
+                ribbon = (mid - lower, upper - mid),
                 fillalpha = 0.35,
                 linecolor = :red,
                 fillcolor = :grey,
@@ -565,6 +696,11 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
             if max(mean_record[component_idx, :, interval_idx-1]...) > ymaxes[component_idx]
                 ymaxes[component_idx] =
                     1.1 * max(mean_record[component_idx, :, interval_idx-1]...)
+                if component_idx == 2
+                    ymaxes[component_idx] = min(0.2, ymaxes[component_idx])
+                elseif component_idx == 4
+                    ymaxes[component_idx] = min(0.02, ymaxes[component_idx])
+                end
             end
             ylims!(projection_update_plts[component_idx], 0, ymaxes[component_idx])
 
@@ -583,14 +719,31 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
             # plot new projection
             component_stdev =
                 sqrt.(max.(0.0, Σ_record[component_idx, component_idx, :, interval_idx]))
+
+            upper = inv_transform(
+                mean_record[component_idx, :, interval_idx] + component_stdev;
+                idx = component_idx,
+            )
+            mid = inv_transform(
+                mean_record[component_idx, :, interval_idx];
+                idx = component_idx,
+            )
+            lower =
+                max.(
+                    0.0,
+                    inv_transform(
+                        mean_record[component_idx, :, interval_idx] - component_stdev;
+                        idx = component_idx,
+                    ),
+                )
+
+            component_stdev =
+                sqrt.(max.(0.0, Σ_record[component_idx, component_idx, :, interval_idx]))
             plot!(
                 projection_update_plts[component_idx],
                 prediction_ts,
-                mean_record[component_idx, :, interval_idx],
-                ribbon = (
-                    min.(component_stdev, mean_record[component_idx, :, interval_idx]),
-                    component_stdev,
-                ),
+                mid,
+                ribbon = (mid - lower, upper - mid),
                 fillalpha = 0.35,
                 linecolor = :blue,
                 fillcolor = :blue,
@@ -600,6 +753,11 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
             if max(mean_record[component_idx, :, interval_idx]...) > ymaxes[component_idx]
                 ymaxes[component_idx] =
                     1.1 * max(mean_record[component_idx, :, interval_idx]...)
+                if component_idx == 2
+                    ymaxes[component_idx] = min(0.2, ymaxes[component_idx])
+                elseif component_idx == 4
+                    ymaxes[component_idx] = min(0.02, ymaxes[component_idx])
+                end
             end
             ylims!(projection_update_plts[component_idx], 0, ymaxes[component_idx])
 
@@ -728,7 +886,7 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
         function hist_interpolated(p, t; idxs = nothing)
             t = max(t, min_time)
             t = min(t, max_time)
-            history_eval = max.(0.0, hist_interpolator(t))
+            history_eval = hist_interpolator(t)
             if typeof(idxs) <: Number
                 return history_eval[idxs]
             else
@@ -756,18 +914,25 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
                 history_times[hist_idx],
                 history_times[hist_idx+1],
             )
+            println()
+            println("A")
+            println(A)
+            println("hsc")
+            println(history_sample_covs[:, :, hist_idx])
+            temp = A * history_sample_covs[:, :, hist_idx] * A' + Q
 
+            println("temp")
+            println(temp)
+            println()
             G =
                 history_sample_covs[:, :, hist_idx] *
                 A' *
                 pinv(A * history_sample_covs[:, :, hist_idx] * A' + Q)
 
             smoothed_means[:, hist_idx] =
-                max.(0.0, 
-                    history_sample_means[:, hist_idx] +
-                    G *
-                    (smoothed_means[:, hist_idx+1] - A * history_sample_means[:, hist_idx])
-                )
+                history_sample_means[:, hist_idx] +
+                G * (smoothed_means[:, hist_idx+1] - A * history_sample_means[:, hist_idx])
+
 
             smoothed_covs[:, :, hist_idx] =
                 history_sample_covs[:, :, hist_idx] +
@@ -817,9 +982,7 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
 
     h5open(filename_prefix * "data.hdf5", "r+") do fid
 
-        δ =
-            hcat(virtual_patient_trajectory(prediction_ts).u...) -
-            smoothed_means
+        δ = hcat(virtual_patient_trajectory(prediction_ts).u...) - smoothed_means
         surprisal_series = zeros(size(mean_record)[2])
         for idx = 1:size(means)[2]
             surprisal_series[idx] =
