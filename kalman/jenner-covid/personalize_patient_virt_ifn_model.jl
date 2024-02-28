@@ -11,6 +11,9 @@ import SciMLBase
 using HDF5
 using ArgParse
 using ProgressBars
+import Logging
+
+Logging.disable_logging(Logging.Error) # no logs of severity < error
 
 ################################################################################
 
@@ -18,8 +21,10 @@ function transform(v; idx = nothing)
     if typeof(idx) <: Number
         if idx == 2
             return log.(max.(1e-15, expm1.(v)))
-        elseif idx == 4
+        elseif idx == 5
             return v .* 100
+        elseif idx == 7
+            return v .* 1000
         else
             return v
         end
@@ -27,7 +32,8 @@ function transform(v; idx = nothing)
         w = copy(v)
         # w[2,:] = log.(max.(1e-300,v[2,:]))
         w[2, :] = log.(max.(1e-15, expm1.(v[2, :])))
-        w[4, :] = v[4, :] .* 100
+        w[5, :] = v[5, :] .* 100
+        w[7, :] = v[7, :] .* 1000
         return w
     end
 end
@@ -36,8 +42,10 @@ function inv_transform(v; idx = nothing)
     if typeof(idx) <: Number
         if idx == 2
             return log1p.(exp.(v))
-        elseif idx == 4
+        elseif idx == 5
             return v ./ 100
+        elseif idx == 7
+            return v ./ 1000
         else
             return v
         end
@@ -45,7 +53,8 @@ function inv_transform(v; idx = nothing)
         w = max.(0.0, v)
         # w[2,:] = exp.(v[2,:])
         w[2, :] = log1p.(exp.(v[2, :]))
-        w[4, :] = v[4, :] ./ 100
+        w[5, :] = v[5, :] ./ 100
+        w[7, :] = v[7, :] ./ 1000
         return w
     end
 end
@@ -270,7 +279,7 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
     history_times = [end_time + dt * (idx - history_size) for idx = 1:history_size]
 
     # plot from now to the end of the simulation
-    num_plot_points = ceil(Int, (end_time - begin_time) / dt)
+    num_plot_points = ceil(Int, (simulation_end_time - begin_time) / dt)
     plot_sample_means = zeros(unified_state_space_dimension, num_plot_points)
     plot_sample_covs_unscaled =
         zeros(unified_state_space_dimension, unified_state_space_dimension, num_plot_points)
@@ -278,7 +287,6 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
 
     mean_record[:, 1+(interval_idx-1)*ceil(Int, sample_dt / dt):end, interval_idx:end] .=
         0.0
-
 
     for sample_idx in ProgressBar(1:num_samples)
 
@@ -393,7 +401,7 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
                 0,
                 min(ylims(state_plts[component_idx])[2], 0.2),
             )
-        elseif component_idx == 4
+        elseif component_idx == 5
             ylims!(
                 state_plts[component_idx],
                 0,
@@ -404,8 +412,8 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
         if component_idx == sample_idx
             plot!(
                 state_plts[component_idx],
-                [plot_times[end]],
-                [virtual_patient_trajectory(plot_times[end])[sample_idx]],
+                [time_intervals[interval_idx+1]],
+                [virtual_patient_trajectory(time_intervals[interval_idx+1])[sample_idx]],
                 seriestype = :scatter,
                 mc = :red,
                 label = "",
@@ -513,7 +521,7 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
                     1.1 * max(mean_record[component_idx, :, interval_idx-1]...)
                 if component_idx == 2
                     ymaxes[component_idx] = min(0.2, ymaxes[component_idx])
-                elseif component_idx == 4
+                elseif component_idx == 5
                     ymaxes[component_idx] = min(0.02, ymaxes[component_idx])
                 end
             end
@@ -570,14 +578,14 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
                     1.1 * max(mean_record[component_idx, :, interval_idx]...)
                 if component_idx == 2
                     ymaxes[component_idx] = min(0.2, ymaxes[component_idx])
-                elseif component_idx == 4
+                elseif component_idx == 5
                     ymaxes[component_idx] = min(0.02, ymaxes[component_idx])
                 end
             end
             ylims!(projection_update_plts[component_idx], 0, ymaxes[component_idx])
 
         end
-        plt = plot(projection_update_plts..., layout = (2, 2), size = (700, 500))
+        plt = plot(projection_update_plts..., layout = (3, 3), size = (700, 500))
         Plots.savefig(plt, filename_prefix * "s$interval_idx-update.pdf")
 
     end # if interval_idx > 1

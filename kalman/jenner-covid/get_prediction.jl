@@ -29,13 +29,29 @@ function get_prediction(begin_time, end_time, prior; stochastic_solutions = true
         const_params = (sird_noise, state_var_noise, param_noise)
 
         if stochastic_solutions
-            sdde_prob_ic = remake(
-                sdde_prob;
-                tspan = (begin_time, end_time),
-                u0 = initial_condition,
-                h = history_sample,
-                p = const_params,
+
+            ####
+            # I don't know why this isn't working, you should be able to use the remake function as below.
+            # That's faster and it even works for the simple model. However, IFN model freaks out with a 
+            # type error. (How it would run in the first few cycles with one is anyone's guess.)
+            # It is hard to believe that this isn't a bug in julia.
+            sdde_prob_ic = SDDEProblem(
+                covid_model,
+                covid_model_noise,
+                initial_condition,
+                history_sample,
+                (0.0, 10.0),
+                const_params;
+                constant_lags = constant_lags,
             )
+            sdde_alg = ImplicitRKMil()
+            # sdde_prob_ic = remake(
+            #     sdde_prob;
+            #     tspan = (begin_time, end_time),
+            #     u0 = initial_condition,
+            #     h = history_sample,
+            #     p = const_params,
+            # )
             prediction = solve(
                 sdde_prob_ic,
                 sdde_alg;

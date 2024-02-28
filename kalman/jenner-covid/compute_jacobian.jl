@@ -13,10 +13,15 @@ function compute_numerical_jacobian(
 
     for component_idx in eachindex(initial_condition)
 
-        # ensure that +/- h never sends us negative
-        h = min(0.1, initial_condition[component_idx] / 2.0)
-        if (h == 0.0) | issubnormal(h)
-            continue
+        # ensure that +/- h never sends us negative, if it is positive
+        # this is for zero lower bounds
+        if initial_condition[component_idx] > 0.0
+            h = min(0.1, initial_condition[component_idx] / 2.0)
+            if (h == 0.0) | issubnormal(h)
+                continue
+            end
+        else
+            h = 0.1
         end
 
         ic_plus = copy(initial_condition)
@@ -28,7 +33,7 @@ function compute_numerical_jacobian(
             h = history_interpolated,
             p = const_params,
         )
-        plus_prediction = transform(solve(
+        plus_prediction = solve(
             dde_prob_ic,
             dde_alg,
             alg_hints = [:stiff],
@@ -36,7 +41,7 @@ function compute_numerical_jacobian(
             isoutofdomain = (u, p, t) -> (any(u .< 0.0)),
         )(
             t_1,
-        ))
+        )
 
         ic_minus = copy(initial_condition)
         ic_minus[component_idx] -= h
@@ -47,7 +52,7 @@ function compute_numerical_jacobian(
             h = history_interpolated,
             p = const_params,
         )
-        minus_prediction = transform(solve(
+        minus_prediction = solve(
             dde_prob_ic,
             dde_alg,
             alg_hints = [:stiff],
@@ -55,7 +60,7 @@ function compute_numerical_jacobian(
             isoutofdomain = (u, p, t) -> (any(u .< 0.0)),
         )(
             t_1,
-        ))
+        )
 
         nan_on_plus = any(isnan.(plus_prediction))
         nan_on_minus = any(isnan.(minus_prediction))
@@ -72,7 +77,7 @@ function compute_numerical_jacobian(
                 h = history_interpolated,
                 p = const_params,
             )
-            zero_prediction = transform(solve(
+            zero_prediction = solve(
                 dde_prob_ic,
                 dde_alg,
                 alg_hints = [:stiff],
@@ -80,7 +85,7 @@ function compute_numerical_jacobian(
                 isoutofdomain = (u, p, t) -> (any(u .< 0.0)),
             )(
                 t_1,
-            ))
+            )
 
             if any(isnan.(zero_prediction))
                 # can't compute, use default

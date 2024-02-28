@@ -225,8 +225,6 @@ end
 
 ################################################################################
 
-local plt
-
 state_plts = []
 for idx = 1:state_space_dim
     local subplt
@@ -290,7 +288,7 @@ for interval_idx in ProgressBar(1:length(time_intervals)-1)
     history_times = [end_time + dt * (idx - history_size) for idx = 1:history_size]
 
     # plot from now to the end of the simulation
-    num_plot_points = ceil(Int, (end_time - begin_time) / dt)
+    num_plot_points = ceil(Int, (simulation_end_time - begin_time) / dt)
     plot_sample_means = zeros(unified_state_space_dimension, num_plot_points)
     plot_sample_covs_unscaled =
         zeros(unified_state_space_dimension, unified_state_space_dimension, num_plot_points)
