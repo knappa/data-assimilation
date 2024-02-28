@@ -1023,7 +1023,7 @@ future_surprisal_average_param = np.array(
 ################################################################################
 
 
-with h5py.File("data.hdf5", "w") as f:
+with h5py.File(FILE_PREFIX + "data.hdf5", "w") as f:
     f["virtual_patient_trajectory"] = vp_full_trajectory
     f["virtual_patient_trajectory"].attrs["index 0"] = "time"
     f["virtual_patient_trajectory"].attrs["index 1"] = (
