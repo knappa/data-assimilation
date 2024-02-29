@@ -51,19 +51,35 @@ else:
 
     parser.add_argument("--verbose", help="print extra messages", action="store_true")
 
+    parser.add_argument("--grid_width", help="width of simulation grid", type=int, default=51)
+    parser.add_argument("--grid_height", help="height of simulation grid", type=int, default=51)
+
+    parser.add_argument("--time_span", help="total simulation time", type=int, default=1000)
+    parser.add_argument(
+        "--sample_interval", help="interval between measurements", type=int, default=50
+    )
+
+    parser.add_argument(
+        "--ensemble_size", help="number of members of ensemble, defaults to dim*(dim-1)", type=int
+    )
+
     args = parser.parse_args()
 
 
 ################################################################################
 # constants
 
-GRID_WIDTH: Final[int] = 51
-GRID_HEIGHT: Final[int] = 51
-TIME_SPAN: Final[int] = 1000
-SAMPLE_INTERVAL: Final[int] = 50  # how often to make measurements
+GRID_WIDTH: Final[int] = 51 if not hasattr(args, "grid_width") else args.grid_width
+GRID_HEIGHT: Final[int] = 51 if not hasattr(args, "grid_height") else args.grid_height
+TIME_SPAN: Final[int] = 1000 if not hasattr(args, "time_span") else args.time_span
+SAMPLE_INTERVAL: Final[int] = 50 if not hasattr(args, "sample_interval") else args.sample_interval
 NUM_CYCLES: Final[int] = TIME_SPAN // SAMPLE_INTERVAL
-ENSEMBLE_SIZE: Final[int] = 50
 UNIFIED_STATE_SPACE_DIMENSION: Final[int] = 8  # 3 macrostates and 5 parameters
+ENSEMBLE_SIZE: Final[int] = (
+    2 * (UNIFIED_STATE_SPACE_DIMENSION * (UNIFIED_STATE_SPACE_DIMENSION - 1) // 2)
+    if not hasattr(args, "ensemble_size")
+    else args.ensemble_size
+)
 OBSERVABLE: Final[str] = "grass" if not hasattr(args, "measurements") else args.measurements
 
 RESAMPLE_MODELS: Final[bool] = False
@@ -409,7 +425,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     # plot projection of state variables
 
     if GRAPHS:
-        fig, axs = plt.subplots(3, figsize=(6, 6), sharex=True)
+        fig, axs = plt.subplots(3, figsize=(6, 6), sharex=True, sharey=False, layout="constrained")
         plural = {"wolf": "wolves", "sheep": "sheep", "grass": "grass"}
         vp_data = {
             "wolf": vp_wolf_counts,
@@ -466,11 +482,9 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 label="future cone of uncertainty",
             )
             axs[idx].set_title(state_var_name, loc="left")
-            # axs[idx].legend()
         handles, labels = axs[0].get_legend_handles_labels()
         fig.legend(handles, labels, loc="outside upper right")
         fig.suptitle("State Projection", ha="left")
-        fig.tight_layout()
         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-state.pdf")
         plt.close(fig)
 
@@ -498,7 +512,9 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             )
         )
 
-        fig, axs = plt.subplots(3, 2, figsize=(8, 8), sharex=True)
+        fig, axs = plt.subplots(
+            3, 2, figsize=(8, 8), sharex=True, sharey=False, layout="constrained"
+        )
         for idx, param_name in enumerate(params):
             row, col = idx % 3, idx // 3
             axs[row, col].plot(
@@ -724,7 +740,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
 ################################################################################
 
 ################################################################################
-# plot projection of state variables
+# plot kalman update of state variables
 
 if GRAPHS:
     plural = {"wolf": "wolves", "sheep": "sheep", "grass": "grass"}
@@ -747,6 +763,7 @@ if GRAPHS:
                 label="true value",
                 color="black",
             )
+
             axs[idx].plot(
                 range(TIME_SPAN + 1),
                 mean_vec[cycle, :, idx],
@@ -758,6 +775,7 @@ if GRAPHS:
                 label="updated estimate",
                 color="red",
             )
+
             axs[idx].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 np.maximum(
