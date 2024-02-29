@@ -1022,11 +1022,13 @@ future_surprisal_average_param = np.array(
 
 ################################################################################
 
+# see the dimension label information here:
+# https://docs.h5py.org/en/latest/high/dims.html
 
 with h5py.File(FILE_PREFIX + "data.hdf5", "w") as f:
     f["virtual_patient_trajectory"] = vp_full_trajectory
-    f["virtual_patient_trajectory"].attrs["index 0"] = "time"
-    f["virtual_patient_trajectory"].attrs["index 1"] = (
+    f["virtual_patient_trajectory"].dims[0].label = "time"
+    f["virtual_patient_trajectory"].dims[1].label = (
         "wolves,"
         "sheep,"
         "grass_proportion,"
@@ -1038,24 +1040,24 @@ with h5py.File(FILE_PREFIX + "data.hdf5", "w") as f:
     )
 
     f["means"] = mean_vec
-    f["means"].attrs["index 0"] = "kalman update number"
-    f["means"].attrs["index 1"] = "time"
-    f["means"].attrs["index 2"] = "state component"
+    f["means"].dims[0].label = "kalman update number"
+    f["means"].dims[1].label = "time"
+    f["means"].dims[2].label = "state component"
 
     f["covs"] = cov_matrix
-    f["covs"].attrs["index 0"] = "kalman update number"
-    f["covs"].attrs["index 1"] = "time"
-    f["covs"].attrs["index 2"] = "state component"
-    f["covs"].attrs["index 3"] = "state component"
+    f["covs"].dims[0].label = "kalman update number"
+    f["covs"].dims[1].label = "time"
+    f["covs"].dims[2].label = "state component"
+    f["covs"].dims[3].label = "state component"
 
     f["surprisal_full"] = surprisal_full
-    f["surprisal_full"].attrs["index 0"] = "kalman update number"
-    f["surprisal_full"].attrs["index 1"] = "time"
+    f["surprisal_full"].dims[0].label = "kalman update number"
+    f["surprisal_full"].dims[1].label = "time"
 
     f["surprisal_state"] = surprisal_state
-    f["surprisal_state"].attrs["index 0"] = "kalman update number"
-    f["surprisal_state"].attrs["index 1"] = "time"
+    f["surprisal_state"].dims[0].label = "kalman update number"
+    f["surprisal_state"].dims[1].label = "time"
 
     f["surprisal_param"] = surprisal_param
-    f["surprisal_param"].attrs["index 0"] = "kalman update number"
-    f["surprisal_param"].attrs["index 1"] = "time"
+    f["surprisal_param"].dims[0].label = "kalman update number"
+    f["surprisal_param"].dims[1].label = "time"
