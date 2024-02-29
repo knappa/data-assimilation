@@ -38,7 +38,7 @@ for (( run=START_NUM; run < END_NUM; run++ )); do
   echo "This is SLURM task $SLURM_ARRAY_TASK_ID, run number $run"
   #Do your stuff here
 
-  PREFIX=g-$(printf %04d $run)
+  PREFIX=w-$(printf %04d $run)
 
   python3 ekf.py --prefix "$PREFIX" --measurements wolves --matchmaker yes
 
