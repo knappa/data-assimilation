@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=wsg-ekf-grass         # Job name
+#SBATCH --job-name=wsg-ekf-wolf-sheep         # Job name
 #SBATCH --mail-type=ALL                # Mail events (NONE, BEGIN, END, FAIL, ALL)
 #SBATCH --mail-user=adam.knapp@ufl.edu # Where to send mail
 #SBATCH --nodes=1                      # Use one node (non-MPI)
@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem-per-cpu=2gb            # Memory per job
 #SBATCH --time=72:00:00                # Time limit hrs:min:sec
-#SBATCH --output=wsg-ekf-grass-array_%A-%a.out  # Standard output and error log
+#SBATCH --output=wsg-ekf-wolf-sheep-array_%A-%a.out  # Standard output and error log
 #SBATCH --array=0-100                   # Array range
 # This is an example script that combines array tasks with
 # bash loops to process many short runs. Array jobs are convenient
@@ -40,7 +40,7 @@ for (( run=START_NUM; run < END_NUM; run++ )); do
 
   PREFIX=g-$(printf %04d $run)
 
-  python3 ekf.py --prefix "$PREFIX" --measurements grass --matchmaker yes
+  python3 ekf.py --prefix "$PREFIX" --measurements wolves+sheep --matchmaker yes
 
 done
 
