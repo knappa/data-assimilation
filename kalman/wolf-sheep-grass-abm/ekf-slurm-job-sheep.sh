@@ -29,7 +29,7 @@ END_NUM=$(( (SLURM_ARRAY_TASK_ID + 1) * PER_TASK ))
 echo "This is task $SLURM_ARRAY_TASK_ID, which will do runs $START_NUM to $(( END_NUM - 1 ))"
 
 module load python3
-cd /home/adam.knapp/blue_rlaubenbacher/adam.knapp/data-assimilation/kalman/wolf-sheep-grass || exit
+cd /home/adam.knapp/blue_rlaubenbacher/adam.knapp/data-assimilation/kalman/wolf-sheep-grass-abm || exit
 source venv/bin/activate
 
 
