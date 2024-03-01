@@ -96,7 +96,7 @@ if hasattr(args, "grid_width"):
     default_params["GRID_WIDTH"] = args.grid_width
 
 if hasattr(args, "grid_height"):
-    default_params["GRID_HEIGH"] = args.grid_height
+    default_params["GRID_HEIGHT"] = args.grid_height
 
 
 VERBOSE: Final[bool] = False if not hasattr(args, "verbose") else args.verbose
@@ -143,7 +143,9 @@ OBSERVABLES: Final[List[str]] = (
 )
 OBSERVABLE_VAR_NAMES: Final[List[str]] = ["total_" + name for name in OBSERVABLES]
 
-FILE_PREFIX: Final[str] = "" if not hasattr(args, "prefix") else args.prefix + "-"
+FILE_PREFIX: Final[str] = (
+    "" if not hasattr(args, "prefix") or len(args.prefix) == 0 else args.prefix + "-"
+)
 
 GRAPHS: Final[bool] = True if not hasattr(args, "graphs") else bool(args.graphs)
 
