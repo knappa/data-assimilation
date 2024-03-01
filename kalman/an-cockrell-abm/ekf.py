@@ -116,9 +116,12 @@ else:
 # not set via the command line. (See above for defaults if you are. Right now,
 # they are also 1.0.)
 rs: Final[Dict[str, float]] = {
-    "total_" + name: 1.0
-    if not hasattr(args, "uncertainty_" + name)
-    else getattr(args, "uncertainty_" + name)
+    "total_"
+    + name: (
+        1.0
+        if not hasattr(args, "uncertainty_" + name)
+        else getattr(args, "uncertainty_" + name)
+    )
     for name in [
         "P_DAMPS",
         "T1IFN",
@@ -510,9 +513,11 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle #"):
                     ),
                 ),
                 np.minimum(
-                    10 * vp_init_params[param_name]
-                    if param_name in vp_init_params
-                    else float("inf"),
+                    (
+                        10 * vp_init_params[param_name]
+                        if param_name in vp_init_params
+                        else float("inf")
+                    ),
                     mean_vec[
                         cycle, : (cycle + 1) * SAMPLE_INTERVAL, len(state_vars) + idx
                     ]
@@ -546,9 +551,11 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle #"):
                     ),
                 ),
                 np.minimum(
-                    10 * vp_init_params[param_name]
-                    if param_name in vp_init_params
-                    else float("inf"),
+                    (
+                        10 * vp_init_params[param_name]
+                        if param_name in vp_init_params
+                        else float("inf")
+                    ),
                     mean_vec[
                         cycle, (cycle + 1) * SAMPLE_INTERVAL :, len(state_vars) + idx
                     ]
@@ -808,9 +815,11 @@ if GRAPHS:
                     ),
                 ),
                 np.minimum(
-                    10 * vp_init_params[param_name]
-                    if param_name in vp_init_params
-                    else float("inf"),
+                    (
+                        10 * vp_init_params[param_name]
+                        if param_name in vp_init_params
+                        else float("inf")
+                    ),
                     mean_vec[
                         cycle, : (cycle + 1) * SAMPLE_INTERVAL, len(state_vars) + idx
                     ]
@@ -844,9 +853,11 @@ if GRAPHS:
                     ),
                 ),
                 np.minimum(
-                    10 * vp_init_params[param_name]
-                    if param_name in vp_init_params
-                    else float("inf"),
+                    (
+                        10 * vp_init_params[param_name]
+                        if param_name in vp_init_params
+                        else float("inf")
+                    ),
                     mean_vec[
                         cycle, (cycle + 1) * SAMPLE_INTERVAL :, len(state_vars) + idx
                     ]
@@ -882,9 +893,11 @@ if GRAPHS:
                     ),
                 ),
                 np.minimum(
-                    10 * vp_init_params[param_name]
-                    if param_name in vp_init_params
-                    else float("inf"),
+                    (
+                        10 * vp_init_params[param_name]
+                        if param_name in vp_init_params
+                        else float("inf")
+                    ),
                     mean_vec[
                         cycle + 1,
                         (cycle + 1) * SAMPLE_INTERVAL :,
