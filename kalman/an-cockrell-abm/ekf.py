@@ -949,9 +949,18 @@ if GRAPHS:
 # full surprisal: all state vars and params
 delta_full = mean_vec - vp_trajectory
 _, logdet = np.linalg.slogdet(cov_matrix)
-surprisal_quadratic_part = np.einsum(
-    "cij,cij->ci", delta_full, np.linalg.solve(cov_matrix, delta_full)
+sigma_inv_delta = np.array(
+    [
+        [
+            np.linalg.lstsq(
+                cov_matrix[cycle, t_idx, :, :], delta_full[cycle, t_idx, :]
+            )[0]
+            for t_idx in range(cov_matrix.shape[1])
+        ]
+        for cycle in range(NUM_CYCLES)
+    ]
 )
+surprisal_quadratic_part = np.einsum("cij,cij->ci", delta_full, sigma_inv_delta)
 surprisal_full = (
     surprisal_quadratic_part
     + logdet
@@ -972,13 +981,21 @@ future_surprisal_average_full = np.array(
 
 #####
 # state surprisal: restrict to just the state vars
-vp_state_trajectory = vp_trajectory[:, : len(state_vars)]
-
-delta_state = mean_vec[:, :, :3] - vp_state_trajectory
-_, logdet = np.linalg.slogdet(cov_matrix[:, :, :3, :3])
-surprisal_quadratic_part = np.einsum(
-    "cij,cij->ci", delta_state, np.linalg.solve(cov_matrix[:, :, :3, :3], delta_state)
+delta_state = mean_vec[:, :, : len(state_vars)] - vp_trajectory[:, : len(state_vars)]
+_, logdet = np.linalg.slogdet(cov_matrix[:, :, : len(state_vars), : len(state_vars)])
+sigma_inv_delta = np.array(
+    [
+        [
+            np.linalg.lstsq(
+                cov_matrix[cycle, t_idx, : len(state_vars), : len(state_vars)],
+                delta_state[cycle, t_idx, :],
+            )[0]
+            for t_idx in range(cov_matrix.shape[1])
+        ]
+        for cycle in range(NUM_CYCLES)
+    ]
 )
+surprisal_quadratic_part = np.einsum("cij,cij->ci", delta_state, sigma_inv_delta)
 surprisal_state = (
     surprisal_quadratic_part + logdet + len(state_vars) * np.log(2 * np.pi)
 ) / 2.0
@@ -1001,13 +1018,19 @@ vp_param_trajectory = vp_trajectory[:, len(state_vars) :]
 
 delta_param = mean_vec[:, :, len(state_vars) :] - vp_param_trajectory
 _, logdet = np.linalg.slogdet(cov_matrix[:, :, len(state_vars) :, len(state_vars) :])
-surprisal_quadratic_part = np.einsum(
-    "cij,cij->ci",
-    delta_param,
-    np.linalg.solve(
-        cov_matrix[:, :, len(state_vars) :, len(state_vars) :], delta_param
-    ),
+sigma_inv_delta = np.array(
+    [
+        [
+            np.linalg.lstsq(
+                cov_matrix[cycle, t_idx, len(state_vars) :, len(state_vars) :],
+                delta_param[cycle, t_idx, :],
+            )[0]
+            for t_idx in range(cov_matrix.shape[1])
+        ]
+        for cycle in range(NUM_CYCLES)
+    ]
 )
+surprisal_quadratic_part = np.einsum("cij,cij->ci", delta_param, sigma_inv_delta)
 surprisal_param = (
     surprisal_quadratic_part + logdet + len(variational_params) * np.log(2 * np.pi)
 ) / 2.0
