@@ -968,9 +968,6 @@ sigma_inv_delta = np.array(
         for cycle in range(NUM_CYCLES)
     ]
 )
-# surprisal_quadratic_part = np.einsum(
-#     "cij,cij->ci", delta_full, np.linalg.solve(cov_matrix, delta_full)
-# )
 surprisal_quadratic_part = np.einsum("cij,cij->ci", delta_full, sigma_inv_delta)
 surprisal_full = (
     surprisal_quadratic_part + logdet + UNIFIED_STATE_SPACE_DIMENSION * np.log(2 * np.pi)
