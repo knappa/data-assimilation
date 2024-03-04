@@ -62,7 +62,7 @@ else:
     )
 
     parser.add_argument(
-        "--ensemble_size", help="number of members of ensemble, defaults to dim*(dim-1)", type=int
+        "--ensemble_size", help="number of members of ensemble, defaults to dim*(dim-1)", type=int, default=-1
     )
 
     args = parser.parse_args()
@@ -79,7 +79,7 @@ NUM_CYCLES: Final[int] = TIME_SPAN // SAMPLE_INTERVAL
 UNIFIED_STATE_SPACE_DIMENSION: Final[int] = 8  # 3 macrostates and 5 parameters
 ENSEMBLE_SIZE: Final[int] = (
     2 * (UNIFIED_STATE_SPACE_DIMENSION * (UNIFIED_STATE_SPACE_DIMENSION - 1) // 2)
-    if not hasattr(args, "ensemble_size")
+    if not hasattr(args, "ensemble_size") or args.ensemble_size == -1
     else args.ensemble_size
 )
 OBSERVABLE: Final[str] = (
