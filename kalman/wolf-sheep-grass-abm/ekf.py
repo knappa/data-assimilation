@@ -146,54 +146,53 @@ def model_macro_data(model: WolfSheepGrassModel):
     return macroscale_data
 
 
-def transform_intrinsic_to_kf(macrostate_intrinsic: np.ndarray, *, indices=()) -> np.ndarray:
+def transform_intrinsic_to_kf(macrostate_intrinsic: np.ndarray, *, index=-1) -> np.ndarray:
     """
     Transform an intrinsic macrostate to a normalized one for the KF.
 
     :param macrostate_intrinsic: intrinsic macrostate
-    :param indices: which index to transform, for arrays with single components
+    :param index: which index to transform, for arrays with single components
     :return: normalized macrostate for kf
     """
-    return (
-        macrostate_intrinsic
-        * np.array(
-            (
-                1.0,  # num_wolves
-                1.0,  # num_sheep
-                1.0,  # num_grass
-                5.0,  # wolf_gain_from_food
-                25.0,  # sheep_gain_from_food
-                20.0,  # wolf_reproduce
-                25.0,  # sheep_reproduce
-                10.0 / 3.0,  # grass_regrowth_time
-            )
-        )[indices]
-    )
+    epsilon = 1e-3
+    if index == -1:
+        # full state
+        retval = np.zeros_like(macrostate_intrinsic)
+        retval[..., 0] = np.log(np.maximum(epsilon, macrostate_intrinsic[..., 0]))
+        retval[..., 1] = np.log(np.maximum(epsilon, macrostate_intrinsic[..., 1]))
+        retval[..., 2] = np.log(np.maximum(epsilon, macrostate_intrinsic[..., 2]))
+        retval[..., 3:] = np.abs(macrostate_intrinsic[..., 3:])
+        return retval
+    elif index == 0 or index == 1 or index == 2:
+        # wolves, sheep, grass
+        return np.log(np.maximum(epsilon, macrostate_intrinsic))
+    else:
+        # parameters
+        return np.abs(macrostate_intrinsic)
 
 
-def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, indices=()) -> np.ndarray:
+def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, index=-1) -> np.ndarray:
     """
     Transform a normalized macrostate to an intrinsic one.
 
     :param macrostate_kf: normalized macrostate for kf
-    :param indices: which index to transform, for arrays with single components
+    :param index: which index to transform, for arrays with single components
     :return: intrinsic macrostate
     """
-    return (
-        macrostate_kf
-        * np.array(
-            (
-                1.0,  # num_wolves
-                1.0,  # num_sheep
-                1.0,  # num_grass
-                0.2,  # wolf_gain_from_food
-                0.04,  # sheep_gain_from_food
-                0.05,  # wolf_reproduce
-                0.04,  # sheep_reproduce
-                0.3,  # grass_regrowth_time
-            )
-        )[indices]
-    )
+    if index == -1:
+        # full state
+        retval = np.zeros_like(macrostate_kf)
+        retval[..., 0] = np.exp(macrostate_kf[..., 0])
+        retval[..., 1] = np.exp(macrostate_kf[..., 1])
+        retval[..., 2] = np.exp(macrostate_kf[..., 2])
+        retval[..., 3:] = np.abs(macrostate_kf[..., 3:])
+        return retval
+    elif index == 0 or index == 1 or index == 2:
+        # wolves, sheep, grass
+        return np.exp(macrostate_kf)
+    else:
+        # parameters
+        return np.abs(macrostate_kf)
 
 
 ################################################################################
@@ -307,29 +306,21 @@ if GRAPHS:
 ################################################################################
 
 
-def model_ensemble_from(means, covariances, *, transform: bool = False):
+def model_ensemble_from(means, covariances, *, transformed_sample: bool = False):
     """
     Create an ensemble of models from a distribution
 
     :param means:
     :param covariances:
-    :param transform: use True if the means and covariances are in KF coordinates
+    :param transformed_sample: use True if the means and covariances are in KF coordinates
     :return:
     """
     mdl_ensemble = []
     distribution = multivariate_normal(mean=means, cov=covariances, allow_singular=True)
     for _ in range(ENSEMBLE_SIZE):
-        (
-            en_init_wolves,
-            en_init_sheep,
-            en_init_grass,
-            en_wolf_gain_from_food,
-            en_sheep_gain_from_food,
-            en_wolf_reproduce,
-            en_sheep_reproduce,
-            en_grass_regrowth_time,
-        ) = np.abs(distribution.rvs())
-        if transform:
+        rand_sample = distribution.rvs()
+
+        if transformed_sample:
             (
                 en_init_wolves,
                 en_init_sheep,
@@ -339,20 +330,18 @@ def model_ensemble_from(means, covariances, *, transform: bool = False):
                 en_wolf_reproduce,
                 en_sheep_reproduce,
                 en_grass_regrowth_time,
-            ) = transform_kf_to_intrinsic(
-                np.array(
-                    (
-                        en_init_wolves,
-                        en_init_sheep,
-                        en_init_grass,
-                        en_wolf_gain_from_food,
-                        en_sheep_gain_from_food,
-                        en_wolf_reproduce,
-                        en_sheep_reproduce,
-                        en_grass_regrowth_time,
-                    )
-                )
-            )
+            ) = transform_kf_to_intrinsic(rand_sample)
+        else:
+            (
+                en_init_wolves,
+                en_init_sheep,
+                en_init_grass,
+                en_wolf_gain_from_food,
+                en_sheep_gain_from_food,
+                en_wolf_reproduce,
+                en_sheep_reproduce,
+                en_grass_regrowth_time,
+            ) = np.abs(rand_sample)
         en_model = WolfSheepGrassModel(
             GRID_WIDTH=GRID_WIDTH,
             GRID_HEIGHT=GRID_HEIGHT,
@@ -566,7 +555,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             (past_estimate_center_line,) = axs[idx].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx], indices=idx
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx], index=idx
                 ),
                 label="estimate of past",
                 color="black",
@@ -578,7 +567,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                     transform_kf_to_intrinsic(
                         mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
                         - np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
-                        indices=idx,
+                        index=idx,
                     ),
                 ),
                 np.minimum(
@@ -586,7 +575,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                     transform_kf_to_intrinsic(
                         mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
                         + np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
-                        indices=idx,
+                        index=idx,
                     ),
                 ),
                 color="gray",
@@ -596,7 +585,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             (prediction_center_line,) = axs[idx].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx], indices=idx
+                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx], index=idx
                 ),
                 label="prediction",
                 color="blue",
@@ -608,7 +597,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                     transform_kf_to_intrinsic(
                         mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
                         - np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-                        indices=idx,
+                        index=idx,
                     ),
                 ),
                 np.minimum(
@@ -616,7 +605,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                     transform_kf_to_intrinsic(
                         mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
                         + np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-                        indices=idx,
+                        index=idx,
                     ),
                 ),
                 color="blue",  # TODO: pick better color
@@ -681,7 +670,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             (past_estimate_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx], indices=3 + idx
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx], index=3 + idx
                 ),
                 color="black",
                 label="estimate of past",
@@ -695,7 +684,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                         - np.sqrt(
                             cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 np.minimum(
@@ -703,9 +692,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                         10 * vp_param_values[param_name],
                         np.max(
                             1.1
-                            * transform_kf_to_intrinsic(
-                                mean_vec[cycle, :, 3 + idx], indices=3 + idx
-                            )
+                            * transform_kf_to_intrinsic(mean_vec[cycle, :, 3 + idx], index=3 + idx)
                         ),
                     ),
                     transform_kf_to_intrinsic(
@@ -713,7 +700,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                         + np.sqrt(
                             cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 color="gray",
@@ -724,7 +711,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             (prediction_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx], indices=3 + idx
+                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx], index=3 + idx
                 ),
                 label="predictive estimate",
                 color="blue",
@@ -738,7 +725,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                         - np.sqrt(
                             cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 np.minimum(
@@ -748,7 +735,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                         + np.sqrt(
                             cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 color="blue",
@@ -782,35 +769,53 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             R = 2.0
             H = np.zeros((1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 0] = 1.0  # observe wolves
-            observation = vp_wolf_counts[time]
+            observation = transform_intrinsic_to_kf(vp_wolf_counts[time], index=0)
         case "sheep":
             R = 2.0
             H = np.zeros((1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 1] = 1.0  # observe sheep
-            observation = vp_sheep_counts[time]
+            observation = transform_intrinsic_to_kf(vp_sheep_counts[time], index=1)
         case "grass":
             R = 1.0
             H = np.zeros((1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 2] = 1.0  # observe grass
-            observation = vp_grass_counts[time]
+            observation = transform_intrinsic_to_kf(vp_grass_counts[time], index=2)
         case "wolves+grass":
             R = np.diag([2.0, 1.0])
             H = np.zeros((2, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 0] = 1.0  # observe wolves
             H[1, 2] = 1.0  # observe grass
-            observation = np.array([vp_wolf_counts[time], vp_grass_counts[time]], dtype=np.float64)
+            observation = np.array(
+                [
+                    transform_intrinsic_to_kf(vp_wolf_counts[time], index=0),
+                    transform_intrinsic_to_kf(vp_grass_counts[time], index=2),
+                ],
+                dtype=np.float64,
+            )
         case "sheep+grass":
             R = np.diag([2.0, 1.0])
             H = np.zeros((2, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 1] = 1.0  # observe sheep
             H[1, 2] = 1.0  # observe grass
-            observation = np.array([vp_sheep_counts[time], vp_grass_counts[time]], dtype=np.float64)
+            observation = np.array(
+                [
+                    transform_intrinsic_to_kf(vp_sheep_counts[time], index=1),
+                    transform_intrinsic_to_kf(vp_grass_counts[time], index=2),
+                ],
+                dtype=np.float64,
+            )
         case "wolves+sheep":
             R = np.diag([2.0, 2.0])
             H = np.zeros((2, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 0] = 1.0  # observe wolves
             H[1, 1] = 1.0  # observe sheep
-            observation = np.array([vp_wolf_counts[time], vp_sheep_counts[time]], dtype=np.float64)
+            observation = np.array(
+                [
+                    transform_intrinsic_to_kf(vp_wolf_counts[time], index=0),
+                    transform_intrinsic_to_kf(vp_sheep_counts[time], index=1),
+                ],
+                dtype=np.float64,
+            )
         case "wolves+sheep+grass":
             R = np.diag([2.0, 2.0, 1.0])
             H = np.zeros((3, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
@@ -818,7 +823,11 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             H[1, 1] = 1.0  # observe sheep
             H[2, 2] = 1.0  # observe sheep
             observation = np.array(
-                [vp_wolf_counts[time], vp_sheep_counts[time], vp_grass_counts[time]],
+                [
+                    transform_intrinsic_to_kf(vp_wolf_counts[time], index=0),
+                    transform_intrinsic_to_kf(vp_sheep_counts[time], index=1),
+                    transform_intrinsic_to_kf(vp_grass_counts[time], index=2),
+                ],
                 dtype=np.float64,
             )
         case _:
@@ -862,7 +871,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     if RESAMPLE_MODELS:
         # create an entirely new set of model instances sampled from KF-learned distribution
         model_ensemble = model_ensemble_from(
-            mean_vec[cycle + 1, time, :], cov_matrix[cycle + 1, time, :, :], transform=True
+            mean_vec[cycle + 1, time, :], cov_matrix[cycle + 1, time, :, :], transformed_sample=True
         )
     else:
         dist = multivariate_normal(
@@ -972,7 +981,7 @@ if GRAPHS:
             (past_est_center_line,) = axs[idx].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx], indices=idx
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx], index=idx
                 ),
                 color="green",
                 label="estimate of past",
@@ -984,7 +993,7 @@ if GRAPHS:
                     transform_kf_to_intrinsic(
                         mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
                         - np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
-                        indices=idx,
+                        index=idx,
                     ),
                 ),
                 np.minimum(
@@ -992,7 +1001,7 @@ if GRAPHS:
                     transform_kf_to_intrinsic(
                         mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
                         + np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
-                        indices=idx,
+                        index=idx,
                     ),
                 ),
                 color="green",
@@ -1002,7 +1011,7 @@ if GRAPHS:
             (future_est_before_update_center_line,) = axs[idx].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx], indices=idx
+                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx], index=idx
                 ),
                 color="#d5b60a",
                 label="previous future estimate",
@@ -1014,7 +1023,7 @@ if GRAPHS:
                     transform_kf_to_intrinsic(
                         mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
                         - np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-                        indices=idx,
+                        index=idx,
                     ),
                 ),
                 np.minimum(
@@ -1022,7 +1031,7 @@ if GRAPHS:
                     transform_kf_to_intrinsic(
                         mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
                         + np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-                        indices=idx,
+                        index=idx,
                     ),
                 ),
                 color="#d5b60a",
@@ -1032,7 +1041,7 @@ if GRAPHS:
             (future_est_after_update_center_line,) = axs[idx].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx], indices=idx
+                    mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx], index=idx
                 ),
                 label="updated future estimate",
                 color="blue",
@@ -1044,7 +1053,7 @@ if GRAPHS:
                     transform_kf_to_intrinsic(
                         mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx]
                         - np.sqrt(cov_matrix[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-                        indices=idx,
+                        index=idx,
                     ),
                 ),
                 np.minimum(
@@ -1052,7 +1061,7 @@ if GRAPHS:
                     transform_kf_to_intrinsic(
                         mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx]
                         + np.sqrt(cov_matrix[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-                        indices=idx,
+                        index=idx,
                     ),
                 ),
                 color="blue",
@@ -1118,7 +1127,7 @@ if GRAPHS:
             (past_est_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx], indices=3 + idx
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx], index=3 + idx
                 ),
                 label="estimate of past",
                 color="green",
@@ -1132,7 +1141,7 @@ if GRAPHS:
                         - np.sqrt(
                             cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 np.minimum(
@@ -1142,7 +1151,7 @@ if GRAPHS:
                         + np.sqrt(
                             cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 color="green",
@@ -1152,7 +1161,7 @@ if GRAPHS:
             (future_est_before_update_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx], indices=3 + idx
+                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx], index=3 + idx
                 ),
                 label="old estimate",
                 color="#d5b60a",
@@ -1166,7 +1175,7 @@ if GRAPHS:
                         - np.sqrt(
                             cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 np.minimum(
@@ -1176,7 +1185,7 @@ if GRAPHS:
                         + np.sqrt(
                             cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 color="#d5b60a",
@@ -1186,7 +1195,7 @@ if GRAPHS:
             (future_est_after_update_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx], indices=3 + idx
+                    mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx], index=3 + idx
                 ),
                 label="updated estimate",
                 color="blue",
@@ -1200,7 +1209,7 @@ if GRAPHS:
                         - np.sqrt(
                             cov_matrix[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 np.minimum(
@@ -1210,7 +1219,7 @@ if GRAPHS:
                         + np.sqrt(
                             cov_matrix[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 color="blue",
