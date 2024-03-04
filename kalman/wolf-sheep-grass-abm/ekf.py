@@ -10,9 +10,9 @@ import numpy as np
 import scipy
 from scipy.stats import multivariate_normal
 from tqdm import tqdm
-from wolf_sheep_grass import WolfSheepGrassModel
 
 from util import random_walk_covariance
+from wolf_sheep_grass import WolfSheepGrassModel
 
 ################################################################################
 
@@ -62,7 +62,10 @@ else:
     )
 
     parser.add_argument(
-        "--ensemble_size", help="number of members of ensemble, defaults to dim*(dim-1)", type=int, default=-1
+        "--ensemble_size",
+        help="number of members of ensemble, defaults to dim*(dim-1)",
+        type=int,
+        default=-1,
     )
 
     args = parser.parse_args()
@@ -71,15 +74,25 @@ else:
 ################################################################################
 # constants
 
-GRID_WIDTH: Final[int] = 51 if not hasattr(args, "grid_width") else args.grid_width
-GRID_HEIGHT: Final[int] = 51 if not hasattr(args, "grid_height") else args.grid_height
-TIME_SPAN: Final[int] = 1000 if not hasattr(args, "time_span") else args.time_span
-SAMPLE_INTERVAL: Final[int] = 50 if not hasattr(args, "sample_interval") else args.sample_interval
+GRID_WIDTH: Final[int] = (
+    51 if not hasattr(args, "grid_width") or args.grid_width is None else args.grid_width
+)
+GRID_HEIGHT: Final[int] = (
+    51 if not hasattr(args, "grid_height") or args.grid_height is None else args.grid_height
+)
+TIME_SPAN: Final[int] = (
+    1000 if not hasattr(args, "time_span") or args.time_span is None else args.time_span
+)
+SAMPLE_INTERVAL: Final[int] = (
+    50
+    if not hasattr(args, "sample_interval") or args.sample_interval is None
+    else args.sample_interval
+)
 NUM_CYCLES: Final[int] = TIME_SPAN // SAMPLE_INTERVAL
 UNIFIED_STATE_SPACE_DIMENSION: Final[int] = 8  # 3 macrostates and 5 parameters
 ENSEMBLE_SIZE: Final[int] = (
     2 * (UNIFIED_STATE_SPACE_DIMENSION * (UNIFIED_STATE_SPACE_DIMENSION - 1) // 2)
-    if not hasattr(args, "ensemble_size") or args.ensemble_size == -1
+    if not hasattr(args, "ensemble_size") or args.ensemble_size is None or args.ensemble_size == -1
     else args.ensemble_size
 )
 OBSERVABLE: Final[str] = (
@@ -98,10 +111,18 @@ MODEL_MATCHMAKER: Final[bool] = (
 # with covariance starvation)
 PARAMETER_RANDOM_WALK: Final[bool] = True
 
-FILE_PREFIX: Final[str] = "" if not hasattr(args, "prefix") else args.prefix + "-"
+FILE_PREFIX: Final[str] = (
+    ""
+    if not hasattr(args, "prefix") or args.prefix is None or len(args.prefix) == 0
+    else args.prefix + "-"
+)
 
-GRAPHS: Final[bool] = True if not hasattr(args, "graphs") else bool(args.graphs)
-VERBOSE: Final[bool] = True if not hasattr(args, "verbose") else bool(args.verbose)
+GRAPHS: Final[bool] = (
+    True if not hasattr(args, "graphs") or args.graphs is None else bool(args.graphs)
+)
+VERBOSE: Final[bool] = (
+    True if not hasattr(args, "verbose") or args.verbose is None else bool(args.verbose)
+)
 
 ################################################################################
 # Macrostate extraction and transformations
@@ -535,18 +556,22 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             "grass": mean_init_grass_proportion * GRID_HEIGHT * GRID_WIDTH,
         }
         for idx, state_var_name in enumerate(["wolf", "sheep", "grass"]):
-            axs[idx].plot(
+            (true_value,) = axs[idx].plot(
                 range(TIME_SPAN + 1),
                 vp_data[state_var_name],
                 label="true value",
+                linestyle=":",
+                color="gray",
+            )
+            (past_estimate_center_line,) = axs[idx].plot(
+                range((cycle + 1) * SAMPLE_INTERVAL),
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx], indices=idx
+                ),
+                label="estimate of past",
                 color="black",
             )
-            axs[idx].plot(
-                range(TIME_SPAN + 1),
-                transform_kf_to_intrinsic(mean_vec[cycle, :, idx], indices=idx),
-                label="estimate",
-            )
-            axs[idx].fill_between(
+            past_estimate_range = axs[idx].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 np.maximum(
                     0.0,
@@ -566,9 +591,17 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 ),
                 color="gray",
                 alpha=0.35,
-                label="past cone of uncertainty",
             )
-            axs[idx].fill_between(
+
+            (prediction_center_line,) = axs[idx].plot(
+                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx], indices=idx
+                ),
+                label="prediction",
+                color="blue",
+            )
+            prediction_range = axs[idx].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 np.maximum(
                     0.0,
@@ -586,14 +619,25 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                         indices=idx,
                     ),
                 ),
-                color="red",  # TODO: pick better color
+                color="blue",  # TODO: pick better color
                 alpha=0.35,
-                label="future cone of uncertainty",
             )
             axs[idx].set_title(state_var_name, loc="left")
-        handles, labels = axs[0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="outside upper right")
-        fig.suptitle("State Projection", ha="left")
+        # noinspection PyUnboundLocalVariable
+        fig.legend(
+            [
+                true_value,
+                (past_estimate_center_line, past_estimate_range),
+                (prediction_center_line, prediction_range),
+            ],
+            [
+                true_value.get_label(),
+                past_estimate_center_line.get_label(),
+                prediction_center_line.get_label(),
+            ],
+            # loc="outside upper right",
+        )
+        fig.suptitle("State Prediction")
         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-state.pdf")
         plt.close(fig)
 
@@ -626,18 +670,23 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
         )
         for idx, param_name in enumerate(params):
             row, col = idx % 3, idx // 3
-            axs[row, col].plot(
+            (true_value,) = axs[row, col].plot(
                 [0, TIME_SPAN + 1],
                 [vp_param_values[param_name]] * 2,
                 label="true value",
+                color="gray",
+                linestyle=":",
+            )
+
+            (past_estimate_center_line,) = axs[row, col].plot(
+                range((cycle + 1) * SAMPLE_INTERVAL),
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx], indices=3 + idx
+                ),
                 color="black",
+                label="estimate of past",
             )
-            axs[row, col].plot(
-                range(TIME_SPAN + 1),
-                transform_kf_to_intrinsic(mean_vec[cycle, :, 3 + idx], indices=3 + idx),
-                label="estimate",
-            )
-            axs[row, col].fill_between(
+            past_estimate_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 np.maximum(
                     0.0,
@@ -671,7 +720,16 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 alpha=0.35,
                 label="past cone of uncertainty",
             )
-            axs[row, col].fill_between(
+
+            (prediction_center_line,) = axs[row, col].plot(
+                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx], indices=3 + idx
+                ),
+                label="predictive estimate",
+                color="blue",
+            )
+            prediction_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 np.maximum(
                     0.0,
@@ -693,16 +751,26 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                         indices=3 + idx,
                     ),
                 ),
-                color="red",  # TODO: pick better color
+                color="blue",
                 alpha=0.35,
-                label="future cone of uncertainty",
             )
             axs[row, col].set_title(param_name)
         axs[2, 1].axis("off")
-        handles, labels = axs[0, 0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="outside lower right")
+        # noinspection PyUnboundLocalVariable
+        fig.legend(
+            [
+                true_value,
+                (past_estimate_center_line, past_estimate_range),
+                (prediction_center_line, prediction_range),
+            ],
+            [
+                true_value.get_label(),
+                past_estimate_center_line.get_label(),
+                prediction_center_line.get_label(),
+            ],
+            loc="outside lower right",
+        )
         fig.suptitle("Parameter Projection")
-        fig.tight_layout()
         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-params.pdf")
         plt.close(fig)
 
@@ -1008,7 +1076,6 @@ if GRAPHS:
             loc="outside lower center",
         )
         fig.suptitle("State Projection", ha="left")
-        # fig.tight_layout() # constrained looks better
         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-state-kfupd.pdf")
         plt.close(fig)
 
