@@ -201,10 +201,10 @@ def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, indices=()) -> np.nd
 # note that these are slightly different from the coordinates for the KF
 # e.g. parameters are untransformed
 
-mean_init_wolves = 50  # state variable (int valued)
-std_init_wolves = 5  # expected to be <= sqrt(50) ~= 7
-mean_init_sheep = 100  # state variable (int valued)
-std_init_sheep = 5  # expected to be <= sqrt(100) = 10
+mean_init_wolves = 50 * GRID_HEIGHT * GRID_WIDTH / (51 ** 2)  # state variable (int valued)
+std_init_wolves = 5 * GRID_HEIGHT * GRID_WIDTH / (51 ** 2)  # expected to be <= sqrt(50) ~= 7
+mean_init_sheep = 100 * GRID_HEIGHT * GRID_WIDTH / (51 ** 2)  # state variable (int valued)
+std_init_sheep = 5 * GRID_HEIGHT * GRID_WIDTH / (51 ** 2)  # expected to be <= sqrt(100) = 10
 mean_init_grass_proportion = 0.5  # state variable
 std_init_grass_proportion = 0.02  # expected to be <= sqrt(0.5*51^2)/(51^2) ~= 0.04
 mean_wolf_gain_from_food = 20.0  # parameter
