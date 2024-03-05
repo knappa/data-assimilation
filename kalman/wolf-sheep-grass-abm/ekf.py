@@ -10,11 +10,7 @@ import numpy as np
 import scipy
 from scipy.stats import multivariate_normal
 from tqdm import tqdm
-
-from util import random_walk_covariance
 from wolf_sheep_grass import WolfSheepGrassModel
-
-from util import random_walk_covariance
 
 from util import random_walk_covariance, slogdet
 
