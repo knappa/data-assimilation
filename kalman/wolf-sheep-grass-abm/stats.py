@@ -38,9 +38,9 @@ for short_name, name in types:
     # collect data
     for file_idx, file in enumerate(files):
         with h5py.File(file, "r") as h5file:
-            surprisal_full[file_idx] = h5file["surprisal_full"][()]
-            surprisal_state[file_idx] = h5file["surprisal_state"][()]
-            surprisal_param[file_idx] = h5file["surprisal_param"][()]
+            surprisal_full[short_name][file_idx] = h5file["surprisal_full"][()]
+            surprisal_state[short_name][file_idx] = h5file["surprisal_state"][()]
+            surprisal_param[short_name][file_idx] = h5file["surprisal_param"][()]
 
 fig = plt.figure()
 ax = fig.gca()

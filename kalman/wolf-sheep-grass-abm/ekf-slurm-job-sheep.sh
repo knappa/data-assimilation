@@ -1,14 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=wsg-ekf-sheep         # Job name
-#SBATCH --mail-type=ALL                # Mail events (NONE, BEGIN, END, FAIL, ALL)
-#SBATCH --mail-user=adam.knapp@ufl.edu # Where to send mail
-#SBATCH --nodes=1                      # Use one node (non-MPI)
-#SBATCH --ntasks=1                     # Run a single task (non-MPI)
+#SBATCH --job-name=ekf-s                # Job name
+#SBATCH --mail-type=ALL                 # Mail events (NONE, BEGIN, END, FAIL, ALL)
+#SBATCH --mail-user=adam.knapp@ufl.edu  # Where to send mail
+#SBATCH --nodes=1                       # Use one node (non-MPI)
+#SBATCH --ntasks=1                      # Run a single task (non-MPI)
 #SBATCH --cpus-per-task=1
-#SBATCH --mem-per-cpu=2gb            # Memory per job
-#SBATCH --time=72:00:00                # Time limit hrs:min:sec
-#SBATCH --output=wsg-ekf-sheep-array_%A-%a.out  # Standard output and error log
-#SBATCH --array=0-100                   # Array range
+#SBATCH --mem-per-cpu=2gb               # Memory per job
+#SBATCH --time=72:00:00                 # Time limit hrs:min:sec
+#SBATCH --output=sheep-array_%A-%a.out  # Standard output and error log
+#SBATCH --array=0-199                   # Array range
 # This is an example script that combines array tasks with
 # bash loops to process many short runs. Array jobs are convenient
 # for running lots of tasks, but if each task is short, they
@@ -18,7 +18,7 @@
 pwd; hostname; date
 
 #Set the number of runs that each SLURM task should do
-PER_TASK=10
+PER_TASK=5
 
 # Calculate the starting and ending values for this task based
 # on the SLURM task and the number of runs per task.
@@ -40,7 +40,12 @@ for (( run=START_NUM; run < END_NUM; run++ )); do
 
   PREFIX=s-$(printf %04d $run)
 
-  python3 ekf.py --prefix "$PREFIX" --measurements sheep --matchmaker yes
+  python3 ekf.py \
+    --prefix "$PREFIX" \
+    --measurements sheep \
+    --matchmaker yes \
+    --grid_width 255 \
+    --grid_height 255
 
 done
 
