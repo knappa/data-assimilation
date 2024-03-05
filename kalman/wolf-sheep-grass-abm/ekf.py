@@ -10,9 +10,9 @@ import numpy as np
 import scipy
 from scipy.stats import multivariate_normal
 from tqdm import tqdm
-
-from util import random_walk_covariance
 from wolf_sheep_grass import WolfSheepGrassModel
+
+from util import random_walk_covariance, slogdet
 
 ################################################################################
 
@@ -55,6 +55,21 @@ else:
 
     parser.add_argument("--grid_width", help="width of simulation grid", type=int, default=51)
     parser.add_argument("--grid_height", help="height of simulation grid", type=int, default=51)
+    parser.add_argument(
+        "--init_wolf_density",
+        help="init number of wolves = density*gridsize",
+        type=float,
+        default=-1,
+    )
+    parser.add_argument(
+        "--init_sheep_density",
+        help="init number of sheep = density*gridsize",
+        type=float,
+        default=-1,
+    )
+    parser.add_argument(
+        "--init_grass_density", help="approx init density of grass", type=float, default=-1
+    )
 
     parser.add_argument("--time_span", help="total simulation time", type=int, default=1000)
     parser.add_argument(
@@ -69,7 +84,6 @@ else:
     )
 
     args = parser.parse_args()
-
 
 ################################################################################
 # constants
@@ -123,6 +137,7 @@ GRAPHS: Final[bool] = (
 VERBOSE: Final[bool] = (
     True if not hasattr(args, "verbose") or args.verbose is None else bool(args.verbose)
 )
+
 
 ################################################################################
 # Macrostate extraction and transformations
@@ -201,11 +216,24 @@ def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, indices=()) -> np.nd
 # note that these are slightly different from the coordinates for the KF
 # e.g. parameters are untransformed
 
-mean_init_wolves = 50 * GRID_HEIGHT * GRID_WIDTH / (51 ** 2)  # state variable (int valued)
-std_init_wolves = 5 * GRID_HEIGHT * GRID_WIDTH / (51 ** 2)  # expected to be <= sqrt(50) ~= 7
-mean_init_sheep = 100 * GRID_HEIGHT * GRID_WIDTH / (51 ** 2)  # state variable (int valued)
-std_init_sheep = 5 * GRID_HEIGHT * GRID_WIDTH / (51 ** 2)  # expected to be <= sqrt(100) = 10
-mean_init_grass_proportion = 0.5  # state variable
+# TODO: command line options of stdevs
+mean_init_wolves = (
+    50 * GRID_HEIGHT * GRID_WIDTH / (51**2)
+    if not hasattr(args, "init_wolf_density") or args.init_wolf_density == -1
+    else args.init_wolf_density * GRID_WIDTH * GRID_HEIGHT
+)  # state variable (int valued)
+std_init_wolves = 5 * GRID_HEIGHT * GRID_WIDTH / (51**2)  # expected to be <= sqrt(50) ~= 7
+mean_init_sheep = (
+    100 * GRID_HEIGHT * GRID_WIDTH / (51**2)
+    if not hasattr(args, "init_sheep_density") or args.init_sheep_density == -1
+    else args.init_sheep_density * GRID_WIDTH * GRID_HEIGHT
+)  # state variable (int valued)
+std_init_sheep = 5 * GRID_HEIGHT * GRID_WIDTH / (51**2)  # expected to be <= sqrt(100) = 10
+mean_init_grass_proportion = (
+    0.5
+    if not hasattr(args, "init_grass_density") or args.init_grass_density == -1
+    else args.init_grass_density
+)  # state variable
 std_init_grass_proportion = 0.02  # expected to be <= sqrt(0.5*51^2)/(51^2) ~= 0.04
 mean_wolf_gain_from_food = 20.0  # parameter
 std_wolf_gain_from_food = 2.0  # arbitrary
@@ -488,7 +516,6 @@ initial_macro_data = np.array(
 )
 mean_vec[:, time, :] = np.mean(initial_macro_data, axis=0)
 cov_matrix[:, time, :, :] = np.cov(initial_macro_data, rowvar=False)
-
 
 for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     # advance ensemble of models
@@ -915,9 +942,9 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                                 macro_data[model_idx, :] - new_sample[possible_sample_pair, :]
                             )
                             if proposed_pair_dist < established_pair_dist:
-                                model_to_sample_pairing[competitor_model_idx] = (
-                                    -1
-                                )  # free the competitor
+                                model_to_sample_pairing[
+                                    competitor_model_idx
+                                ] = -1  # free the competitor
                                 all_paired = False
                                 # make new pair
                                 sample_to_model_pairing[possible_sample_pair] = model_idx
@@ -961,7 +988,6 @@ if GRAPHS:
     for cycle in range(NUM_CYCLES - 1):
         fig, axs = plt.subplots(3, figsize=(6, 6), sharex=True, layout="constrained")
         for idx, state_var_name in enumerate(["wolf", "sheep", "grass"]):
-
             (true_value,) = axs[idx].plot(
                 range(TIME_SPAN + 1),
                 vp_data[state_var_name],
@@ -1261,7 +1287,7 @@ vp_full_trajectory = transform_intrinsic_to_kf(
 )
 
 delta_full = mean_vec - vp_full_trajectory
-_, logdet = np.linalg.slogdet(cov_matrix)
+_, logdet = slogdet(cov_matrix)
 sigma_inv_delta = np.array(
     [
         [
@@ -1273,9 +1299,9 @@ sigma_inv_delta = np.array(
         for cycle in range(NUM_CYCLES + 1)
     ]
 )
-surprisal_quadratic_part = np.einsum("cij,cij->ci", delta_full, sigma_inv_delta)
+surprisal_full_quadratic_part = np.einsum("cij,cij->ci", delta_full, sigma_inv_delta)
 surprisal_full = (
-    surprisal_quadratic_part + logdet + UNIFIED_STATE_SPACE_DIMENSION * np.log(2 * np.pi)
+    surprisal_full_quadratic_part + logdet + UNIFIED_STATE_SPACE_DIMENSION * np.log(2 * np.pi)
 ) / 2.0
 
 # average of surprisal over all time
@@ -1294,7 +1320,7 @@ future_surprisal_average_full = np.array(
 # state surprisal: restrict to just the state vars
 vp_state_trajectory = vp_full_trajectory[:, :3]
 delta_state = mean_vec[:, :, :3] - vp_state_trajectory
-_, logdet = np.linalg.slogdet(cov_matrix[:, :, :3, :3])
+_, logdet = slogdet(cov_matrix[:, :, :3, :3])
 sigma_inv_delta = np.array(
     [
         [
@@ -1307,9 +1333,9 @@ sigma_inv_delta = np.array(
     ]
 )
 
-surprisal_quadratic_part = np.einsum("cij,cij->ci", delta_state, sigma_inv_delta)
+surprisal_state_quadratic_part = np.einsum("cij,cij->ci", delta_state, sigma_inv_delta)
 surprisal_state = (
-    surprisal_quadratic_part + logdet + 3 * np.log(2 * np.pi)
+    surprisal_state_quadratic_part + logdet + 3 * np.log(2 * np.pi)
 ) / 2.0  # 3 -> 3 state vars
 
 # average of state surprisal over all time
@@ -1328,7 +1354,7 @@ future_surprisal_average_state = np.array(
 # param surprisal: restrict to just the params
 vp_param_trajectory = vp_full_trajectory[:, 3:]
 delta_param = mean_vec[:, :, 3:] - vp_param_trajectory
-_, logdet = np.linalg.slogdet(cov_matrix[:, :, 3:, 3:])
+_, logdet = slogdet(cov_matrix[:, :, 3:, 3:])
 sigma_inv_delta = np.array(
     [
         [
@@ -1341,8 +1367,10 @@ sigma_inv_delta = np.array(
     ]
 )
 
-surprisal_quadratic_part = np.einsum("cij,cij->ci", delta_param, sigma_inv_delta)
-surprisal_param = (surprisal_quadratic_part + logdet + 5 * np.log(2 * np.pi)) / 2.0  # 5 -> 5 params
+surprisal_param_quadratic_part = np.einsum("cij,cij->ci", delta_param, sigma_inv_delta)
+surprisal_param = (
+    surprisal_param_quadratic_part + logdet + 5 * np.log(2 * np.pi)
+) / 2.0  # 5 -> 5 params
 
 # average of state surprisal over all time
 # note: dt = 1 so integral is just mean
@@ -1355,7 +1383,6 @@ future_surprisal_average_param = np.array(
         for cycle in range(NUM_CYCLES - 1)
     ]
 )
-
 
 ################################################################################
 
@@ -1396,10 +1423,22 @@ with h5py.File(FILE_PREFIX + "data.hdf5", "w") as f:
     f["surprisal_full"].dims[0].label = "kalman update number"
     f["surprisal_full"].dims[1].label = "time"
 
+    f["surprisal_full_quad"] = surprisal_full_quadratic_part
+    f["surprisal_full_quad"].dims[0].label = "kalman update number"
+    f["surprisal_full_quad"].dims[1].label = "time"
+
     f["surprisal_state"] = surprisal_state
     f["surprisal_state"].dims[0].label = "kalman update number"
     f["surprisal_state"].dims[1].label = "time"
 
+    f["surprisal_state_quad"] = surprisal_state_quadratic_part
+    f["surprisal_state_quad"].dims[0].label = "kalman update number"
+    f["surprisal_state_quad"].dims[1].label = "time"
+
     f["surprisal_param"] = surprisal_param
     f["surprisal_param"].dims[0].label = "kalman update number"
     f["surprisal_param"].dims[1].label = "time"
+
+    f["surprisal_param_quad"] = surprisal_param_quadratic_part
+    f["surprisal_param_quad"].dims[0].label = "kalman update number"
+    f["surprisal_param_quad"].dims[1].label = "time"
