@@ -10,9 +10,9 @@ import numpy as np
 import scipy
 from scipy.stats import multivariate_normal
 from tqdm import tqdm
+from wolf_sheep_grass import WolfSheepGrassModel
 
 from util import random_walk_covariance
-from wolf_sheep_grass import WolfSheepGrassModel
 
 ################################################################################
 
@@ -70,7 +70,6 @@ else:
 
     args = parser.parse_args()
 
-
 ################################################################################
 # constants
 
@@ -124,6 +123,7 @@ VERBOSE: Final[bool] = (
     True if not hasattr(args, "verbose") or args.verbose is None else bool(args.verbose)
 )
 
+
 ################################################################################
 # Macrostate extraction and transformations
 
@@ -159,16 +159,22 @@ def transform_intrinsic_to_kf(macrostate_intrinsic: np.ndarray, *, index=-1) -> 
         # full state
         retval = np.zeros_like(macrostate_intrinsic)
         retval[..., 0] = np.log(np.maximum(epsilon, macrostate_intrinsic[..., 0]))
-        retval[..., 1] = np.log(np.maximum(epsilon, macrostate_intrinsic[..., 1]))
-        retval[..., 2] = np.log(np.maximum(epsilon, macrostate_intrinsic[..., 2]))
-        retval[..., 3:] = np.abs(macrostate_intrinsic[..., 3:])
+        retval[..., 1] = macrostate_intrinsic[..., 1] / 10
+        retval[..., 2] = macrostate_intrinsic[..., 2] / 100
+        retval[..., 3:] = macrostate_intrinsic[..., 3:]
         return retval
-    elif index == 0 or index == 1 or index == 2:
-        # wolves, sheep, grass
+    elif index == 0:
+        # wolves
         return np.log(np.maximum(epsilon, macrostate_intrinsic))
+    elif index == 1:
+        # sheep
+        return macrostate_intrinsic / 10
+    elif index == 2:
+        # grass
+        return macrostate_intrinsic / 100
     else:
         # parameters
-        return np.abs(macrostate_intrinsic)
+        return macrostate_intrinsic
 
 
 def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, index=-1) -> np.ndarray:
@@ -183,16 +189,22 @@ def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, index=-1) -> np.ndar
         # full state
         retval = np.zeros_like(macrostate_kf)
         retval[..., 0] = np.exp(macrostate_kf[..., 0])
-        retval[..., 1] = np.exp(macrostate_kf[..., 1])
-        retval[..., 2] = np.exp(macrostate_kf[..., 2])
-        retval[..., 3:] = np.abs(macrostate_kf[..., 3:])
+        retval[..., 1] = np.maximum(0.0, macrostate_kf[..., 1]) * 10
+        retval[..., 2] = np.maximum(0.0, macrostate_kf[..., 2]) * 100
+        retval[..., 3:] = np.maximum(0.0, macrostate_kf[..., 3:])
         return retval
-    elif index == 0 or index == 1 or index == 2:
-        # wolves, sheep, grass
+    elif index == 0:
+        # wolves
         return np.exp(macrostate_kf)
+    elif index == 1:
+        # sheep
+        return np.maximum(0.0, macrostate_kf) * 10
+    elif index == 2:
+        # grass
+        return np.maximum(0.0, macrostate_kf) * 100
     else:
         # parameters
-        return np.abs(macrostate_kf)
+        return np.maximum(0.0, macrostate_kf)
 
 
 ################################################################################
@@ -386,7 +398,7 @@ def modify_model(
         wolf_reproduce,
         sheep_reproduce,
         grass_regrowth_time,
-    ) = np.abs(desired_state)
+    ) = np.maximum(0, desired_state)
     model.WOLF_GAIN_FROM_FOOD = wolf_gain_from_food
     model.SHEEP_GAIN_FROM_FOOD = sheep_gain_from_food
     model.WOLF_REPRODUCE = wolf_reproduce
@@ -478,7 +490,6 @@ initial_macro_data = np.array(
 mean_vec[:, time, :] = np.mean(initial_macro_data, axis=0)
 cov_matrix[:, time, :, :] = np.cov(initial_macro_data, rowvar=False)
 
-
 for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     # advance ensemble of models
     for _ in range(SAMPLE_INTERVAL):
@@ -486,7 +497,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             model.time_step()
             if PARAMETER_RANDOM_WALK:
                 macrostate = transform_intrinsic_to_kf(model_macro_data(model))
-                random_walk_macrostate = np.abs(
+                random_walk_macrostate = (
                     macrostate
                     + multivariate_normal(
                         mean=np.zeros_like(macrostate),
@@ -511,7 +522,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             model.time_step()
             if PARAMETER_RANDOM_WALK:
                 macrostate = transform_intrinsic_to_kf(model_macro_data(model))
-                random_walk_macrostate = np.abs(
+                random_walk_macrostate = (
                     macrostate
                     + multivariate_normal(
                         mean=np.zeros_like(macrostate),
@@ -562,13 +573,10 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             )
             past_estimate_range = axs[idx].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL),
-                np.maximum(
-                    0.0,
-                    transform_kf_to_intrinsic(
-                        mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
-                        - np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
-                        index=idx,
-                    ),
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
+                    - np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
+                    index=idx,
                 ),
                 np.minimum(
                     10 * max_scales[state_var_name],
@@ -582,33 +590,26 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 alpha=0.35,
             )
 
+            mu = mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
+            sigma = np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx])
+
             (prediction_center_line,) = axs[idx].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                transform_kf_to_intrinsic(
-                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx], index=idx
-                ),
+                transform_kf_to_intrinsic(mu, index=idx),
                 label="prediction",
                 color="blue",
             )
             prediction_range = axs[idx].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                np.maximum(
-                    0.0,
-                    transform_kf_to_intrinsic(
-                        mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-                        - np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-                        index=idx,
-                    ),
-                ),
+                transform_kf_to_intrinsic(mu - sigma, index=idx),
                 np.minimum(
                     10 * max_scales[state_var_name],
                     transform_kf_to_intrinsic(
-                        mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-                        + np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
+                        mu + sigma,
                         index=idx,
                     ),
                 ),
-                color="blue",  # TODO: pick better color
+                color="blue",
                 alpha=0.35,
             )
             axs[idx].set_title(state_var_name, loc="left")
@@ -677,15 +678,10 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             )
             past_estimate_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL),
-                np.maximum(
-                    0.0,
-                    transform_kf_to_intrinsic(
-                        mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx]
-                        - np.sqrt(
-                            cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx, 3 + idx]
-                        ),
-                        index=3 + idx,
-                    ),
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx]
+                    - np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx, 3 + idx]),
+                    index=3 + idx,
                 ),
                 np.minimum(
                     np.maximum(
@@ -718,15 +714,10 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             )
             prediction_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                np.maximum(
-                    0.0,
-                    transform_kf_to_intrinsic(
-                        mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx]
-                        - np.sqrt(
-                            cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx, 3 + idx]
-                        ),
-                        index=3 + idx,
-                    ),
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx]
+                    - np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx, 3 + idx]),
+                    index=3 + idx,
                 ),
                 np.minimum(
                     10 * vp_param_values[param_name],
@@ -924,9 +915,9 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                                 macro_data[model_idx, :] - new_sample[possible_sample_pair, :]
                             )
                             if proposed_pair_dist < established_pair_dist:
-                                model_to_sample_pairing[competitor_model_idx] = (
-                                    -1
-                                )  # free the competitor
+                                model_to_sample_pairing[
+                                    competitor_model_idx
+                                ] = -1  # free the competitor
                                 all_paired = False
                                 # make new pair
                                 sample_to_model_pairing[possible_sample_pair] = model_idx
@@ -970,7 +961,6 @@ if GRAPHS:
     for cycle in range(NUM_CYCLES - 1):
         fig, axs = plt.subplots(3, figsize=(6, 6), sharex=True, layout="constrained")
         for idx, state_var_name in enumerate(["wolf", "sheep", "grass"]):
-
             (true_value,) = axs[idx].plot(
                 range(TIME_SPAN + 1),
                 vp_data[state_var_name],
@@ -1364,7 +1354,6 @@ future_surprisal_average_param = np.array(
         for cycle in range(NUM_CYCLES - 1)
     ]
 )
-
 
 ################################################################################
 
