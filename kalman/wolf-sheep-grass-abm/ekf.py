@@ -12,6 +12,7 @@ from scipy.stats import multivariate_normal
 from tqdm import tqdm
 from wolf_sheep_grass import WolfSheepGrassModel
 
+from transform import transform_intrinsic_to_kf, transform_kf_to_intrinsic
 from util import random_walk_covariance, slogdet
 
 ################################################################################
@@ -83,6 +84,25 @@ else:
         default=-1,
     )
 
+    parser.add_argument(
+        "--wolf_r",
+        help="R matrix term for wolves",
+        type=float,
+        default=-1.0,
+    )
+    parser.add_argument(
+        "--sheep_r",
+        help="R matrix term for sheep",
+        type=float,
+        default=-1.0,
+    )
+    parser.add_argument(
+        "--grass_r",
+        help="R matrix term for grass",
+        type=float,
+        default=-1.0,
+    )
+
     args = parser.parse_args()
 
 ################################################################################
@@ -113,7 +133,9 @@ OBSERVABLE: Final[str] = (
     "wolves+sheep+grass" if not hasattr(args, "measurements") else args.measurements
 )
 
-RESAMPLE_MODELS: Final[bool] = False
+WOLF_R:float = 1.0 if not hasattr(args, "wolf_r") or args.wolf_r is None or args.wolf_r == -1 else args.wolf_r
+SHEEP_R:float = 1.0 if not hasattr(args, "sheep_r") or args.sheep_r is None or args.sheep_r == -1 else args.sheep_r
+GRASS_R:float = 1.0 if not hasattr(args, "grass_r") or args.grass_r is None or args.grass_r == -1 else args.grass_r
 
 # if we are altering the models (as opposed to resampling) try to match the
 # models to minimize the changes necessary.
@@ -159,67 +181,6 @@ def model_macro_data(model: WolfSheepGrassModel):
     macroscale_data[6] = model.SHEEP_REPRODUCE
     macroscale_data[7] = model.GRASS_REGROWTH_TIME
     return macroscale_data
-
-
-def transform_intrinsic_to_kf(macrostate_intrinsic: np.ndarray, *, index=-1) -> np.ndarray:
-    """
-    Transform an intrinsic macrostate to a normalized one for the KF.
-
-    :param macrostate_intrinsic: intrinsic macrostate
-    :param index: which index to transform, for arrays with single components
-    :return: normalized macrostate for kf
-    """
-    epsilon = 1e-3
-    if index == -1:
-        # full state
-        retval = np.zeros_like(macrostate_intrinsic)
-        retval[..., 0] = np.log(np.maximum(epsilon, macrostate_intrinsic[..., 0]))
-        retval[..., 1] = macrostate_intrinsic[..., 1] / 10
-        retval[..., 2] = macrostate_intrinsic[..., 2] / 100
-        retval[..., 3:] = macrostate_intrinsic[..., 3:]
-        return retval
-    elif index == 0:
-        # wolves
-        return np.log(np.maximum(epsilon, macrostate_intrinsic))
-    elif index == 1:
-        # sheep
-        return macrostate_intrinsic / 10
-    elif index == 2:
-        # grass
-        return macrostate_intrinsic / 100
-    else:
-        # parameters
-        return macrostate_intrinsic
-
-
-def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, index=-1) -> np.ndarray:
-    """
-    Transform a normalized macrostate to an intrinsic one.
-
-    :param macrostate_kf: normalized macrostate for kf
-    :param index: which index to transform, for arrays with single components
-    :return: intrinsic macrostate
-    """
-    if index == -1:
-        # full state
-        retval = np.zeros_like(macrostate_kf)
-        retval[..., 0] = np.exp(macrostate_kf[..., 0])
-        retval[..., 1] = np.maximum(0.0, macrostate_kf[..., 1]) * 10
-        retval[..., 2] = np.maximum(0.0, macrostate_kf[..., 2]) * 100
-        retval[..., 3:] = np.maximum(0.0, macrostate_kf[..., 3:])
-        return retval
-    elif index == 0:
-        # wolves
-        return np.exp(macrostate_kf)
-    elif index == 1:
-        # sheep
-        return np.maximum(0.0, macrostate_kf) * 10
-    elif index == 2:
-        # grass
-        return np.maximum(0.0, macrostate_kf) * 100
-    else:
-        # parameters
-        return np.maximum(0.0, macrostate_kf)
 
 
 ################################################################################
@@ -785,22 +746,22 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
 
     match OBSERVABLE:
         case "wolves":
-            R = 2.0
+            R = WOLF_R
             H = np.zeros((1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 0] = 1.0  # observe wolves
             observation = transform_intrinsic_to_kf(vp_wolf_counts[time], index=0)
         case "sheep":
-            R = 2.0
+            R = SHEEP_R
             H = np.zeros((1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 1] = 1.0  # observe sheep
             observation = transform_intrinsic_to_kf(vp_sheep_counts[time], index=1)
         case "grass":
-            R = 1.0
+            R = GRASS_R
             H = np.zeros((1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 2] = 1.0  # observe grass
             observation = transform_intrinsic_to_kf(vp_grass_counts[time], index=2)
         case "wolves+grass":
-            R = np.diag([2.0, 1.0])
+            R = np.diag([WOLF_R, GRASS_R])
             H = np.zeros((2, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 0] = 1.0  # observe wolves
             H[1, 2] = 1.0  # observe grass
@@ -812,7 +773,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 dtype=np.float64,
             )
         case "sheep+grass":
-            R = np.diag([2.0, 1.0])
+            R = np.diag([SHEEP_R, GRASS_R])
             H = np.zeros((2, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 1] = 1.0  # observe sheep
             H[1, 2] = 1.0  # observe grass
@@ -824,7 +785,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 dtype=np.float64,
             )
         case "wolves+sheep":
-            R = np.diag([2.0, 2.0])
+            R = np.diag([WOLF_R, SHEEP_R])
             H = np.zeros((2, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 0] = 1.0  # observe wolves
             H[1, 1] = 1.0  # observe sheep
@@ -836,7 +797,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 dtype=np.float64,
             )
         case "wolves+sheep+grass":
-            R = np.diag([2.0, 2.0, 1.0])
+            R = np.diag([WOLF_R, SHEEP_R, GRASS_R])
             H = np.zeros((3, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 0] = 1.0  # observe wolves
             H[1, 1] = 1.0  # observe sheep
@@ -887,87 +848,81 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     )
 
     # recreate ensemble
-    if RESAMPLE_MODELS:
-        # create an entirely new set of model instances sampled from KF-learned distribution
-        model_ensemble = model_ensemble_from(
-            mean_vec[cycle + 1, time, :], cov_matrix[cycle + 1, time, :, :], transformed_sample=True
-        )
-    else:
-        dist = multivariate_normal(
-            mean=mean_vec[cycle + 1, time, :],
-            cov=cov_matrix[cycle + 1, time, :, :],
-            allow_singular=True,
-        )
-        if MODEL_MATCHMAKER:
-            new_sample = dist.rvs(size=ENSEMBLE_SIZE)
-            # Gale-Shapely matching algorithm to try and pair up the models and these new samples
+    dist = multivariate_normal(
+        mean=mean_vec[cycle + 1, time, :],
+        cov=cov_matrix[cycle + 1, time, :, :],
+        allow_singular=True,
+    )
+    if MODEL_MATCHMAKER:
+        new_sample = dist.rvs(size=ENSEMBLE_SIZE)
+        # Gale-Shapely matching algorithm to try and pair up the models and these new samples
 
-            # fill out preference lists for the models
-            prefs = np.zeros((ENSEMBLE_SIZE, ENSEMBLE_SIZE), dtype=np.int64)
-            for idx in range(ENSEMBLE_SIZE):
-                # noinspection PyUnboundLocalVariable
-                dists = np.linalg.norm(new_sample - macro_data[idx], axis=1)
-                prefs[idx, :] = np.argsort(dists)
+        # fill out preference lists for the models
+        prefs = np.zeros((ENSEMBLE_SIZE, ENSEMBLE_SIZE), dtype=np.int64)
+        for idx in range(ENSEMBLE_SIZE):
+            # noinspection PyUnboundLocalVariable
+            dists = np.linalg.norm(new_sample - macro_data[idx], axis=1)
+            prefs[idx, :] = np.argsort(dists)
 
-            # arrays to record pairings
-            model_to_sample_pairing = np.full(ENSEMBLE_SIZE, -1, dtype=np.int64)
-            sample_to_model_pairing = np.full(ENSEMBLE_SIZE, -1, dtype=np.int64)
+        # arrays to record pairings
+        model_to_sample_pairing = np.full(ENSEMBLE_SIZE, -1, dtype=np.int64)
+        sample_to_model_pairing = np.full(ENSEMBLE_SIZE, -1, dtype=np.int64)
 
-            all_paired = False
-            while not all_paired:
-                all_paired = True
-                for model_idx in range(ENSEMBLE_SIZE):
-                    if model_to_sample_pairing[model_idx] != -1:
-                        # skip already paired models
-                        continue
-                    # found an unpaired model, find the first thing not yet
-                    # checked on its preference list
-                    min_pref_idx = np.argmax(prefs[model_idx, :] >= 0)
-                    for pref_idx in range(min_pref_idx, ENSEMBLE_SIZE):
-                        possible_sample_pair = prefs[model_idx, pref_idx]
-                        competitor_model_idx = sample_to_model_pairing[possible_sample_pair]
-                        if competitor_model_idx == -1:
-                            # if the sample is unpaired, pair the two
+        all_paired = False
+        while not all_paired:
+            all_paired = True
+            for model_idx in range(ENSEMBLE_SIZE):
+                if model_to_sample_pairing[model_idx] != -1:
+                    # skip already paired models
+                    continue
+                # found an unpaired model, find the first thing not yet
+                # checked on its preference list
+                min_pref_idx = np.argmax(prefs[model_idx, :] >= 0)
+                for pref_idx in range(min_pref_idx, ENSEMBLE_SIZE):
+                    possible_sample_pair = prefs[model_idx, pref_idx]
+                    competitor_model_idx = sample_to_model_pairing[possible_sample_pair]
+                    if competitor_model_idx == -1:
+                        # if the sample is unpaired, pair the two
+                        sample_to_model_pairing[possible_sample_pair] = model_idx
+                        model_to_sample_pairing[model_idx] = possible_sample_pair
+                        # erase this possibility for future pairings
+                        prefs[model_idx, pref_idx] = -1
+                        break  # stop looking now
+                    else:
+                        # compare preferences
+                        established_pair_dist = np.linalg.norm(
+                            macro_data[competitor_model_idx, :]
+                            - new_sample[possible_sample_pair, :]
+                        )
+                        proposed_pair_dist = np.linalg.norm(
+                            macro_data[model_idx, :] - new_sample[possible_sample_pair, :]
+                        )
+                        if proposed_pair_dist < established_pair_dist:
+                            model_to_sample_pairing[
+                                competitor_model_idx
+                            ] = -1  # free the competitor
+                            all_paired = False
+                            # make new pair
                             sample_to_model_pairing[possible_sample_pair] = model_idx
                             model_to_sample_pairing[model_idx] = possible_sample_pair
                             # erase this possibility for future pairings
                             prefs[model_idx, pref_idx] = -1
                             break  # stop looking now
                         else:
-                            # compare preferences
-                            established_pair_dist = np.linalg.norm(
-                                macro_data[competitor_model_idx, :]
-                                - new_sample[possible_sample_pair, :]
-                            )
-                            proposed_pair_dist = np.linalg.norm(
-                                macro_data[model_idx, :] - new_sample[possible_sample_pair, :]
-                            )
-                            if proposed_pair_dist < established_pair_dist:
-                                model_to_sample_pairing[
-                                    competitor_model_idx
-                                ] = -1  # free the competitor
-                                all_paired = False
-                                # make new pair
-                                sample_to_model_pairing[possible_sample_pair] = model_idx
-                                model_to_sample_pairing[model_idx] = possible_sample_pair
-                                # erase this possibility for future pairings
-                                prefs[model_idx, pref_idx] = -1
-                                break  # stop looking now
-                            else:
-                                prefs[model_idx, pref_idx] = -1  # this one didn't work
-                                continue
+                            prefs[model_idx, pref_idx] = -1  # this one didn't work
+                            continue
 
-            # now do the model modifications
-            for model_idx in range(ENSEMBLE_SIZE):
-                modify_model(
-                    model_ensemble[model_idx],
-                    transform_kf_to_intrinsic(new_sample[model_to_sample_pairing[model_idx], :]),
-                )
-        else:
-            # sample from KF-learned dist and modify existing models to fit
-            for model in model_ensemble:
-                state = dist.rvs()
-                modify_model(model, transform_kf_to_intrinsic(state))
+        # now do the model modifications
+        for model_idx in range(ENSEMBLE_SIZE):
+            modify_model(
+                model_ensemble[model_idx],
+                transform_kf_to_intrinsic(new_sample[model_to_sample_pairing[model_idx], :]),
+            )
+    else:
+        # sample from KF-learned dist and modify existing models to fit
+        for model in model_ensemble:
+            state = dist.rvs()
+            modify_model(model, transform_kf_to_intrinsic(state))
 
 ################################################################################
 
