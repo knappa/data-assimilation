@@ -133,9 +133,19 @@ OBSERVABLE: Final[str] = (
     "wolves+sheep+grass" if not hasattr(args, "measurements") else args.measurements
 )
 
-WOLF_R:float = 1.0 if not hasattr(args, "wolf_r") or args.wolf_r is None or args.wolf_r == -1 else args.wolf_r
-SHEEP_R:float = 1.0 if not hasattr(args, "sheep_r") or args.sheep_r is None or args.sheep_r == -1 else args.sheep_r
-GRASS_R:float = 1.0 if not hasattr(args, "grass_r") or args.grass_r is None or args.grass_r == -1 else args.grass_r
+WOLF_R: float = (
+    1.0 if not hasattr(args, "wolf_r") or args.wolf_r is None or args.wolf_r == -1 else args.wolf_r
+)
+SHEEP_R: float = (
+    1.0
+    if not hasattr(args, "sheep_r") or args.sheep_r is None or args.sheep_r == -1
+    else args.sheep_r
+)
+GRASS_R: float = (
+    1.0
+    if not hasattr(args, "grass_r") or args.grass_r is None or args.grass_r == -1
+    else args.grass_r
+)
 
 # if we are altering the models (as opposed to resampling) try to match the
 # models to minimize the changes necessary.
@@ -470,6 +480,10 @@ cov_matrix = np.zeros(
     (NUM_CYCLES + 1, TIME_SPAN + 1, UNIFIED_STATE_SPACE_DIMENSION, UNIFIED_STATE_SPACE_DIMENSION),
     dtype=np.float64,
 )
+
+kalman_v = []
+kalman_S = []
+kalman_K = []
 
 # collect initial statistics
 time = 0
@@ -816,6 +830,10 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     v = observation - (H @ mean_vec[cycle, time, :])
     S = H @ cov_matrix[cycle, time, :, :] @ H.T + R
     K = cov_matrix[cycle, time, :, :] @ H.T @ np.linalg.pinv(S)
+
+    kalman_v.append(v)
+    kalman_S.append(S)
+    kalman_K.append(K)
 
     mean_vec[cycle + 1, time, :] += K @ v
     cov_matrix[cycle + 1, time, :, :] -= K @ S @ K.T
@@ -1398,3 +1416,7 @@ with h5py.File(FILE_PREFIX + "data.hdf5", "w") as f:
     f["surprisal_param_quad"] = surprisal_param_quadratic_part
     f["surprisal_param_quad"].dims[0].label = "kalman update number"
     f["surprisal_param_quad"].dims[1].label = "time"
+
+    f["kalman_v"] = np.array(kalman_v)
+    f["kalman_S"] = np.array(kalman_S)
+    f["kalman_K"] = np.array(kalman_K)
