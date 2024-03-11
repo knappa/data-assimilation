@@ -157,7 +157,7 @@ GRASS_R: Final[float] = (
 PARAM_STOCH_LEVEL: Final[float] = (
     0.01
     if not hasattr(args, "param_stoch_level")
-    or args.param_toch_level is None
+    or args.param_stoch_level is None
     or args.param_stoch_level == -1
     else args.param_stoch_level
 )
@@ -510,7 +510,7 @@ cov_matrix[:, time, :, :] = np.cov(initial_macro_data, rowvar=False)
 
 for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     # advance ensemble of models
-    for _ in range(SAMPLE_INTERVAL):
+    for time in range(cycle * SAMPLE_INTERVAL + 1, (cycle + 1) * SAMPLE_INTERVAL + 1):
         for model in model_ensemble:
             model.time_step()
             if PARAMETER_RANDOM_WALK:
@@ -534,7 +534,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
 
     # make copy of the models and advance them to the end of the simulation time
     model_ensemble_copy = deepcopy(model_ensemble)
-    for future_time in range(time, TIME_SPAN + 1):
+    for future_time in range((cycle + 1) * SAMPLE_INTERVAL + 1, TIME_SPAN + 1):
         for model in model_ensemble_copy:
             model.time_step()
             if PARAMETER_RANDOM_WALK:
