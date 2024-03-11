@@ -43,7 +43,7 @@ for (( run=START_NUM; run < END_NUM; run++ )); do
   for stoch_level in 0.100 0.050 0.010 0.005 0.001;
   do
     python3 ekf.py  \
-      --prefix "$PREFIX"-$stoch_level \
+      --prefix st-"$PREFIX"-$stoch_level \
       --measurements grass \
       --matchmaker yes \
       --grid_width 255 \
@@ -56,7 +56,7 @@ for (( run=START_NUM; run < END_NUM; run++ )); do
   for stoch_level in 0.100 0.050 0.010 0.005 0.001;
   do
     python3 ekf.py  \
-      --prefix "$PREFIX"-$stoch_level \
+      --prefix st-"$PREFIX"-$stoch_level \
       --measurements sheep \
       --matchmaker yes \
       --grid_width 255 \
@@ -69,7 +69,7 @@ for (( run=START_NUM; run < END_NUM; run++ )); do
   for stoch_level in 0.100 0.050 0.010 0.005 0.001;
   do
     python3 ekf.py  \
-      --prefix "$PREFIX"-$stoch_level \
+      --prefix st-"$PREFIX"-$stoch_level \
       --measurements wolf \
       --matchmaker yes \
       --grid_width 255 \
