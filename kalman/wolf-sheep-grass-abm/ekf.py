@@ -103,6 +103,13 @@ else:
         default=-1.0,
     )
 
+    parser.add_argument(
+        "--param_stoch_level",
+        help="stochasticity parameter for parameter random walk",
+        type=float,
+        default=0.01,
+    )
+
     args = parser.parse_args()
 
 ################################################################################
@@ -133,18 +140,26 @@ OBSERVABLE: Final[str] = (
     "wolves+sheep+grass" if not hasattr(args, "measurements") else args.measurements
 )
 
-WOLF_R: float = (
+WOLF_R: Final[float] = (
     1.0 if not hasattr(args, "wolf_r") or args.wolf_r is None or args.wolf_r == -1 else args.wolf_r
 )
-SHEEP_R: float = (
+SHEEP_R: Final[float] = (
     1.0
     if not hasattr(args, "sheep_r") or args.sheep_r is None or args.sheep_r == -1
     else args.sheep_r
 )
-GRASS_R: float = (
+GRASS_R: Final[float] = (
     1.0
     if not hasattr(args, "grass_r") or args.grass_r is None or args.grass_r == -1
     else args.grass_r
+)
+
+PARAM_STOCH_LEVEL: Final[float] = (
+    0.01
+    if not hasattr(args, "param_stoch_level")
+    or args.param_toch_level is None
+    or args.param_stoch_level == -1
+    else args.param_stoch_level
 )
 
 # if we are altering the models (as opposed to resampling) try to match the
@@ -504,14 +519,13 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                     macrostate
                     + multivariate_normal(
                         mean=np.zeros_like(macrostate),
-                        cov=random_walk_covariance(macrostate),
+                        cov=random_walk_covariance(macrostate, param_stoch_level=PARAM_STOCH_LEVEL),
                         allow_singular=True,
                     ).rvs()
                 )
                 modify_model(
                     model, transform_kf_to_intrinsic(random_walk_macrostate), ignore_state_vars=True
                 )
-        time += 1
         macro_data = np.array(
             [transform_intrinsic_to_kf(model_macro_data(model)) for model in model_ensemble]
         )
@@ -529,7 +543,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                     macrostate
                     + multivariate_normal(
                         mean=np.zeros_like(macrostate),
-                        cov=random_walk_covariance(macrostate),
+                        cov=random_walk_covariance(macrostate, param_stoch_level=PARAM_STOCH_LEVEL),
                         allow_singular=True,
                     ).rvs()
                 )
@@ -1345,18 +1359,6 @@ surprisal_param_quadratic_part = np.einsum("cij,cij->ci", delta_param, sigma_inv
 surprisal_param = (
     surprisal_param_quadratic_part + logdet + 5 * np.log(2 * np.pi)
 ) / 2.0  # 5 -> 5 params
-
-# average of state surprisal over all time
-# note: dt = 1 so integral is just mean
-surprisal_average_param = np.mean(surprisal_param, axis=1)
-
-# average of state surprisal over all _future_ times
-future_surprisal_average_param = np.array(
-    [
-        np.mean(surprisal_param[cycle, (cycle + 1) * SAMPLE_INTERVAL :])
-        for cycle in range(NUM_CYCLES - 1)
-    ]
-)
 
 ################################################################################
 
