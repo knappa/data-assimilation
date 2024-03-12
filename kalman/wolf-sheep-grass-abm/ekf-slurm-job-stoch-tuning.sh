@@ -40,7 +40,7 @@ for (( run=START_NUM; run < END_NUM; run++ )); do
 
   # grass
   PREFIX=g-$(printf %04d "$run")
-  for stoch_level in 0.100 0.050 0.010 0.005 0.001;
+  for stoch_level in 0.050 0.010 0.005 0.001;
   do
     python3 ekf.py  \
       --prefix st-"$PREFIX"-$stoch_level \
@@ -53,7 +53,7 @@ for (( run=START_NUM; run < END_NUM; run++ )); do
 
   # sheep
   PREFIX=s-$(printf %04d "$run")
-  for stoch_level in 0.100 0.050 0.010 0.005 0.001;
+  for stoch_level in 0.050 0.010 0.005 0.001;
   do
     python3 ekf.py  \
       --prefix st-"$PREFIX"-$stoch_level \
@@ -66,7 +66,7 @@ for (( run=START_NUM; run < END_NUM; run++ )); do
 
   # wolf
   PREFIX=w-$(printf %04d "$run")
-  for stoch_level in 0.100 0.050 0.010 0.005 0.001;
+  for stoch_level in 0.050 0.010 0.005 0.001;
   do
     python3 ekf.py  \
       --prefix st-"$PREFIX"-$stoch_level \
