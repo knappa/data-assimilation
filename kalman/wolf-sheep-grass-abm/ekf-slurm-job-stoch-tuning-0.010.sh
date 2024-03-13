@@ -32,6 +32,7 @@ module load python3
 cd /home/adam.knapp/blue_rlaubenbacher/adam.knapp/data-assimilation/kalman/wolf-sheep-grass-abm || exit
 source venv/bin/activate
 
+stoch_level=0.010
 
 # Run the loop of runs for this task.
 for (( run=START_NUM; run < END_NUM; run++ )); do
@@ -40,42 +41,33 @@ for (( run=START_NUM; run < END_NUM; run++ )); do
 
   # grass
   PREFIX=g-$(printf %04d "$run")
-  for stoch_level in 0.050 0.010 0.005 0.001;
-  do
-    python3 ekf.py  \
-      --prefix st-"$PREFIX"-$stoch_level \
-      --measurements grass \
-      --matchmaker yes \
-      --grid_width 255 \
-      --grid_height 255 \
-      --param_stoch_level $stoch_level
-  done
+  python3 ekf.py  \
+    --prefix st-"$PREFIX"-$stoch_level \
+    --measurements grass \
+    --matchmaker yes \
+    --grid_width 255 \
+    --grid_height 255 \
+    --param_stoch_level $stoch_level
 
   # sheep
   PREFIX=s-$(printf %04d "$run")
-  for stoch_level in 0.050 0.010 0.005 0.001;
-  do
-    python3 ekf.py  \
-      --prefix st-"$PREFIX"-$stoch_level \
-      --measurements sheep \
-      --matchmaker yes \
-      --grid_width 255 \
-      --grid_height 255 \
-      --param_stoch_level $stoch_level
-  done
+  python3 ekf.py  \
+    --prefix st-"$PREFIX"-$stoch_level \
+    --measurements sheep \
+    --matchmaker yes \
+    --grid_width 255 \
+    --grid_height 255 \
+    --param_stoch_level $stoch_level
 
   # wolf
   PREFIX=w-$(printf %04d "$run")
-  for stoch_level in 0.050 0.010 0.005 0.001;
-  do
-    python3 ekf.py  \
-      --prefix st-"$PREFIX"-$stoch_level \
-      --measurements wolf \
-      --matchmaker yes \
-      --grid_width 255 \
-      --grid_height 255 \
-      --param_stoch_level $stoch_level
-  done
+  python3 ekf.py  \
+    --prefix st-"$PREFIX"-$stoch_level \
+    --measurements wolf \
+    --matchmaker yes \
+    --grid_width 255 \
+    --grid_height 255 \
+    --param_stoch_level $stoch_level
 
 done
 
