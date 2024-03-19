@@ -63,7 +63,7 @@ for (( run=START_NUM; run < END_NUM; run++ )); do
   PREFIX=w-$(printf %04d "$run")
   python3 ekf.py  \
     --prefix st-"$PREFIX"-$stoch_level \
-    --measurements wolf \
+    --measurements wolves \
     --matchmaker yes \
     --grid_width 255 \
     --grid_height 255 \

@@ -30,15 +30,19 @@ else:
         type=str,
         choices=[
             "wolves",
+            "wolf",
             "sheep",
             "grass",
             "wolves+grass",
+            "wolf+grass",
             "sheep+grass",
             "wolves+sheep",
+            "wolf+sheep",
             "wolves+sheep+grass",
+            "wolf+sheep+grass",
         ],
         default="grass",
-        help="which things to measure",
+        help="which things to measure, either wolf/wolves produce same result",
     )
 
     parser.add_argument(
@@ -136,9 +140,10 @@ ENSEMBLE_SIZE: Final[int] = (
     if not hasattr(args, "ensemble_size") or args.ensemble_size is None or args.ensemble_size == -1
     else args.ensemble_size
 )
-OBSERVABLE: Final[str] = (
+OBSERVABLE_temp: Final[str] = (
     "wolves+sheep+grass" if not hasattr(args, "measurements") else args.measurements
 )
+OBSERVABLE: Final[str] = OBSERVABLE_temp.replace("wolf", "wolves")  # canonicalize the name
 
 WOLF_R: Final[float] = (
     1.0 if not hasattr(args, "wolf_r") or args.wolf_r is None or args.wolf_r == -1 else args.wolf_r
