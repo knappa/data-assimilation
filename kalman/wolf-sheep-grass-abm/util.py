@@ -3,9 +3,15 @@ from typing import Tuple
 import numpy as np
 
 
-def random_walk_covariance(macrostate):
-    # TODO: tuning
-    return np.diag(0.01 * macrostate)
+def random_walk_covariance(macrostate, *, param_stoch_level: float = 0.01):
+    """
+    Construct a covariance matrix for the random walk in parameter space.
+
+    :param macrostate:
+    :param param_stoch_level:
+    :return:
+    """
+    return np.diag([0.01] + list(param_stoch_level * np.abs(macrostate[1:])))
 
 
 def slogdet(m: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:

@@ -12,6 +12,7 @@ from scipy.stats import multivariate_normal
 from tqdm import tqdm
 from wolf_sheep_grass import WolfSheepGrassModel
 
+from transform import transform_intrinsic_to_kf, transform_kf_to_intrinsic
 from util import random_walk_covariance, slogdet
 
 ################################################################################
@@ -29,15 +30,19 @@ else:
         type=str,
         choices=[
             "wolves",
+            "wolf",
             "sheep",
             "grass",
             "wolves+grass",
+            "wolf+grass",
             "sheep+grass",
             "wolves+sheep",
+            "wolf+sheep",
             "wolves+sheep+grass",
+            "wolf+sheep+grass",
         ],
         default="grass",
-        help="which things to measure",
+        help="which things to measure, either wolf/wolves produce same result",
     )
 
     parser.add_argument(
@@ -83,6 +88,32 @@ else:
         default=-1,
     )
 
+    parser.add_argument(
+        "--wolf_r",
+        help="R matrix term for wolves",
+        type=float,
+        default=-1.0,
+    )
+    parser.add_argument(
+        "--sheep_r",
+        help="R matrix term for sheep",
+        type=float,
+        default=-1.0,
+    )
+    parser.add_argument(
+        "--grass_r",
+        help="R matrix term for grass",
+        type=float,
+        default=-1.0,
+    )
+
+    parser.add_argument(
+        "--param_stoch_level",
+        help="stochasticity parameter for parameter random walk",
+        type=float,
+        default=0.01,
+    )
+
     args = parser.parse_args()
 
 ################################################################################
@@ -109,11 +140,32 @@ ENSEMBLE_SIZE: Final[int] = (
     if not hasattr(args, "ensemble_size") or args.ensemble_size is None or args.ensemble_size == -1
     else args.ensemble_size
 )
-OBSERVABLE: Final[str] = (
+OBSERVABLE_temp: Final[str] = (
     "wolves+sheep+grass" if not hasattr(args, "measurements") else args.measurements
 )
+OBSERVABLE: Final[str] = OBSERVABLE_temp.replace("wolf", "wolves")  # canonicalize the name
 
-RESAMPLE_MODELS: Final[bool] = False
+WOLF_R: Final[float] = (
+    1.0 if not hasattr(args, "wolf_r") or args.wolf_r is None or args.wolf_r == -1 else args.wolf_r
+)
+SHEEP_R: Final[float] = (
+    1.0
+    if not hasattr(args, "sheep_r") or args.sheep_r is None or args.sheep_r == -1
+    else args.sheep_r
+)
+GRASS_R: Final[float] = (
+    1.0
+    if not hasattr(args, "grass_r") or args.grass_r is None or args.grass_r == -1
+    else args.grass_r
+)
+
+PARAM_STOCH_LEVEL: Final[float] = (
+    0.01
+    if not hasattr(args, "param_stoch_level")
+    or args.param_stoch_level is None
+    or args.param_stoch_level == -1
+    else args.param_stoch_level
+)
 
 # if we are altering the models (as opposed to resampling) try to match the
 # models to minimize the changes necessary.
@@ -159,56 +211,6 @@ def model_macro_data(model: WolfSheepGrassModel):
     macroscale_data[6] = model.SHEEP_REPRODUCE
     macroscale_data[7] = model.GRASS_REGROWTH_TIME
     return macroscale_data
-
-
-def transform_intrinsic_to_kf(macrostate_intrinsic: np.ndarray, *, indices=()) -> np.ndarray:
-    """
-    Transform an intrinsic macrostate to a normalized one for the KF.
-
-    :param macrostate_intrinsic: intrinsic macrostate
-    :param indices: which index to transform, for arrays with single components
-    :return: normalized macrostate for kf
-    """
-    return (
-        macrostate_intrinsic
-        * np.array(
-            (
-                1.0,  # num_wolves
-                1.0,  # num_sheep
-                1.0,  # num_grass
-                5.0,  # wolf_gain_from_food
-                25.0,  # sheep_gain_from_food
-                20.0,  # wolf_reproduce
-                25.0,  # sheep_reproduce
-                10.0 / 3.0,  # grass_regrowth_time
-            )
-        )[indices]
-    )
-
-
-def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, indices=()) -> np.ndarray:
-    """
-    Transform a normalized macrostate to an intrinsic one.
-
-    :param macrostate_kf: normalized macrostate for kf
-    :param indices: which index to transform, for arrays with single components
-    :return: intrinsic macrostate
-    """
-    return (
-        macrostate_kf
-        * np.array(
-            (
-                1.0,  # num_wolves
-                1.0,  # num_sheep
-                1.0,  # num_grass
-                0.2,  # wolf_gain_from_food
-                0.04,  # sheep_gain_from_food
-                0.05,  # wolf_reproduce
-                0.04,  # sheep_reproduce
-                0.3,  # grass_regrowth_time
-            )
-        )[indices]
-    )
 
 
 ################################################################################
@@ -302,6 +304,7 @@ virtual_patient_model = WolfSheepGrassModel(
     WOLF_REPRODUCE=vp_wolf_reproduce,
     SHEEP_REPRODUCE=vp_sheep_reproduce,
     GRASS_REGROWTH_TIME=vp_grass_regrowth_time,
+    SOFTCAP_AGENT_NUM_AT_GRID_SIZE=True,
 )
 
 # evaluate the virtual patient's trajectory
@@ -335,29 +338,21 @@ if GRAPHS:
 ################################################################################
 
 
-def model_ensemble_from(means, covariances, *, transform: bool = False):
+def model_ensemble_from(means, covariances, *, transformed_sample: bool = False):
     """
     Create an ensemble of models from a distribution
 
     :param means:
     :param covariances:
-    :param transform: use True if the means and covariances are in KF coordinates
+    :param transformed_sample: use True if the means and covariances are in KF coordinates
     :return:
     """
     mdl_ensemble = []
     distribution = multivariate_normal(mean=means, cov=covariances, allow_singular=True)
     for _ in range(ENSEMBLE_SIZE):
-        (
-            en_init_wolves,
-            en_init_sheep,
-            en_init_grass,
-            en_wolf_gain_from_food,
-            en_sheep_gain_from_food,
-            en_wolf_reproduce,
-            en_sheep_reproduce,
-            en_grass_regrowth_time,
-        ) = np.abs(distribution.rvs())
-        if transform:
+        rand_sample = distribution.rvs()
+
+        if transformed_sample:
             (
                 en_init_wolves,
                 en_init_sheep,
@@ -367,20 +362,18 @@ def model_ensemble_from(means, covariances, *, transform: bool = False):
                 en_wolf_reproduce,
                 en_sheep_reproduce,
                 en_grass_regrowth_time,
-            ) = transform_kf_to_intrinsic(
-                np.array(
-                    (
-                        en_init_wolves,
-                        en_init_sheep,
-                        en_init_grass,
-                        en_wolf_gain_from_food,
-                        en_sheep_gain_from_food,
-                        en_wolf_reproduce,
-                        en_sheep_reproduce,
-                        en_grass_regrowth_time,
-                    )
-                )
-            )
+            ) = transform_kf_to_intrinsic(rand_sample)
+        else:
+            (
+                en_init_wolves,
+                en_init_sheep,
+                en_init_grass,
+                en_wolf_gain_from_food,
+                en_sheep_gain_from_food,
+                en_wolf_reproduce,
+                en_sheep_reproduce,
+                en_grass_regrowth_time,
+            ) = np.abs(rand_sample)
         en_model = WolfSheepGrassModel(
             GRID_WIDTH=GRID_WIDTH,
             GRID_HEIGHT=GRID_HEIGHT,
@@ -425,7 +418,7 @@ def modify_model(
         wolf_reproduce,
         sheep_reproduce,
         grass_regrowth_time,
-    ) = np.abs(desired_state)
+    ) = np.maximum(0, desired_state)
     model.WOLF_GAIN_FROM_FOOD = wolf_gain_from_food
     model.SHEEP_GAIN_FROM_FOOD = sheep_gain_from_food
     model.WOLF_REPRODUCE = wolf_reproduce
@@ -509,6 +502,10 @@ cov_matrix = np.zeros(
     dtype=np.float64,
 )
 
+kalman_v = []
+kalman_S = []
+kalman_K = []
+
 # collect initial statistics
 time = 0
 initial_macro_data = np.array(
@@ -519,23 +516,22 @@ cov_matrix[:, time, :, :] = np.cov(initial_macro_data, rowvar=False)
 
 for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     # advance ensemble of models
-    for _ in range(SAMPLE_INTERVAL):
+    for time in range(cycle * SAMPLE_INTERVAL + 1, (cycle + 1) * SAMPLE_INTERVAL + 1):
         for model in model_ensemble:
             model.time_step()
             if PARAMETER_RANDOM_WALK:
                 macrostate = transform_intrinsic_to_kf(model_macro_data(model))
-                random_walk_macrostate = np.abs(
+                random_walk_macrostate = (
                     macrostate
                     + multivariate_normal(
                         mean=np.zeros_like(macrostate),
-                        cov=random_walk_covariance(macrostate),
+                        cov=random_walk_covariance(macrostate, param_stoch_level=PARAM_STOCH_LEVEL),
                         allow_singular=True,
                     ).rvs()
                 )
                 modify_model(
                     model, transform_kf_to_intrinsic(random_walk_macrostate), ignore_state_vars=True
                 )
-        time += 1
         macro_data = np.array(
             [transform_intrinsic_to_kf(model_macro_data(model)) for model in model_ensemble]
         )
@@ -544,16 +540,16 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
 
     # make copy of the models and advance them to the end of the simulation time
     model_ensemble_copy = deepcopy(model_ensemble)
-    for future_time in range(time, TIME_SPAN + 1):
+    for future_time in range((cycle + 1) * SAMPLE_INTERVAL + 1, TIME_SPAN + 1):
         for model in model_ensemble_copy:
             model.time_step()
             if PARAMETER_RANDOM_WALK:
                 macrostate = transform_intrinsic_to_kf(model_macro_data(model))
-                random_walk_macrostate = np.abs(
+                random_walk_macrostate = (
                     macrostate
                     + multivariate_normal(
                         mean=np.zeros_like(macrostate),
-                        cov=random_walk_covariance(macrostate),
+                        cov=random_walk_covariance(macrostate, param_stoch_level=PARAM_STOCH_LEVEL),
                         allow_singular=True,
                     ).rvs()
                 )
@@ -593,60 +589,50 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             (past_estimate_center_line,) = axs[idx].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx], indices=idx
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx], index=idx
                 ),
                 label="estimate of past",
                 color="black",
             )
             past_estimate_range = axs[idx].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL),
-                np.maximum(
-                    0.0,
-                    transform_kf_to_intrinsic(
-                        mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
-                        - np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
-                        indices=idx,
-                    ),
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
+                    - np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
+                    index=idx,
                 ),
                 np.minimum(
                     10 * max_scales[state_var_name],
                     transform_kf_to_intrinsic(
                         mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
                         + np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
-                        indices=idx,
+                        index=idx,
                     ),
                 ),
                 color="gray",
                 alpha=0.35,
             )
 
+            mu = mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
+            sigma = np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx])
+
             (prediction_center_line,) = axs[idx].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                transform_kf_to_intrinsic(
-                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx], indices=idx
-                ),
+                transform_kf_to_intrinsic(mu, index=idx),
                 label="prediction",
                 color="blue",
             )
             prediction_range = axs[idx].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                np.maximum(
-                    0.0,
-                    transform_kf_to_intrinsic(
-                        mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-                        - np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-                        indices=idx,
-                    ),
-                ),
+                transform_kf_to_intrinsic(mu - sigma, index=idx),
                 np.minimum(
                     10 * max_scales[state_var_name],
                     transform_kf_to_intrinsic(
-                        mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-                        + np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-                        indices=idx,
+                        mu + sigma,
+                        index=idx,
                     ),
                 ),
-                color="blue",  # TODO: pick better color
+                color="blue",
                 alpha=0.35,
             )
             axs[idx].set_title(state_var_name, loc="left")
@@ -708,31 +694,24 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             (past_estimate_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx], indices=3 + idx
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx], index=3 + idx
                 ),
                 color="black",
                 label="estimate of past",
             )
             past_estimate_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL),
-                np.maximum(
-                    0.0,
-                    transform_kf_to_intrinsic(
-                        mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx]
-                        - np.sqrt(
-                            cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx, 3 + idx]
-                        ),
-                        indices=3 + idx,
-                    ),
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx]
+                    - np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx, 3 + idx]),
+                    index=3 + idx,
                 ),
                 np.minimum(
                     np.maximum(
                         10 * vp_param_values[param_name],
                         np.max(
                             1.1
-                            * transform_kf_to_intrinsic(
-                                mean_vec[cycle, :, 3 + idx], indices=3 + idx
-                            )
+                            * transform_kf_to_intrinsic(mean_vec[cycle, :, 3 + idx], index=3 + idx)
                         ),
                     ),
                     transform_kf_to_intrinsic(
@@ -740,7 +719,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                         + np.sqrt(
                             cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 color="gray",
@@ -751,22 +730,17 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             (prediction_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx], indices=3 + idx
+                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx], index=3 + idx
                 ),
                 label="predictive estimate",
                 color="blue",
             )
             prediction_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                np.maximum(
-                    0.0,
-                    transform_kf_to_intrinsic(
-                        mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx]
-                        - np.sqrt(
-                            cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx, 3 + idx]
-                        ),
-                        indices=3 + idx,
-                    ),
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx]
+                    - np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx, 3 + idx]),
+                    index=3 + idx,
                 ),
                 np.minimum(
                     10 * vp_param_values[param_name],
@@ -775,7 +749,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                         + np.sqrt(
                             cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 color="blue",
@@ -806,46 +780,68 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
 
     match OBSERVABLE:
         case "wolves":
-            R = 2.0
+            R = WOLF_R
             H = np.zeros((1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 0] = 1.0  # observe wolves
-            observation = vp_wolf_counts[time]
+            observation = transform_intrinsic_to_kf(vp_wolf_counts[time], index=0)
         case "sheep":
-            R = 2.0
+            R = SHEEP_R
             H = np.zeros((1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 1] = 1.0  # observe sheep
-            observation = vp_sheep_counts[time]
+            observation = transform_intrinsic_to_kf(vp_sheep_counts[time], index=1)
         case "grass":
-            R = 1.0
+            R = GRASS_R
             H = np.zeros((1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 2] = 1.0  # observe grass
-            observation = vp_grass_counts[time]
+            observation = transform_intrinsic_to_kf(vp_grass_counts[time], index=2)
         case "wolves+grass":
-            R = np.diag([2.0, 1.0])
+            R = np.diag([WOLF_R, GRASS_R])
             H = np.zeros((2, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 0] = 1.0  # observe wolves
             H[1, 2] = 1.0  # observe grass
-            observation = np.array([vp_wolf_counts[time], vp_grass_counts[time]], dtype=np.float64)
+            observation = np.array(
+                [
+                    transform_intrinsic_to_kf(vp_wolf_counts[time], index=0),
+                    transform_intrinsic_to_kf(vp_grass_counts[time], index=2),
+                ],
+                dtype=np.float64,
+            )
         case "sheep+grass":
-            R = np.diag([2.0, 1.0])
+            R = np.diag([SHEEP_R, GRASS_R])
             H = np.zeros((2, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 1] = 1.0  # observe sheep
             H[1, 2] = 1.0  # observe grass
-            observation = np.array([vp_sheep_counts[time], vp_grass_counts[time]], dtype=np.float64)
+            observation = np.array(
+                [
+                    transform_intrinsic_to_kf(vp_sheep_counts[time], index=1),
+                    transform_intrinsic_to_kf(vp_grass_counts[time], index=2),
+                ],
+                dtype=np.float64,
+            )
         case "wolves+sheep":
-            R = np.diag([2.0, 2.0])
+            R = np.diag([WOLF_R, SHEEP_R])
             H = np.zeros((2, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 0] = 1.0  # observe wolves
             H[1, 1] = 1.0  # observe sheep
-            observation = np.array([vp_wolf_counts[time], vp_sheep_counts[time]], dtype=np.float64)
+            observation = np.array(
+                [
+                    transform_intrinsic_to_kf(vp_wolf_counts[time], index=0),
+                    transform_intrinsic_to_kf(vp_sheep_counts[time], index=1),
+                ],
+                dtype=np.float64,
+            )
         case "wolves+sheep+grass":
-            R = np.diag([2.0, 2.0, 1.0])
+            R = np.diag([WOLF_R, SHEEP_R, GRASS_R])
             H = np.zeros((3, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
             H[0, 0] = 1.0  # observe wolves
             H[1, 1] = 1.0  # observe sheep
             H[2, 2] = 1.0  # observe sheep
             observation = np.array(
-                [vp_wolf_counts[time], vp_sheep_counts[time], vp_grass_counts[time]],
+                [
+                    transform_intrinsic_to_kf(vp_wolf_counts[time], index=0),
+                    transform_intrinsic_to_kf(vp_sheep_counts[time], index=1),
+                    transform_intrinsic_to_kf(vp_grass_counts[time], index=2),
+                ],
                 dtype=np.float64,
             )
         case _:
@@ -854,6 +850,10 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     v = observation - (H @ mean_vec[cycle, time, :])
     S = H @ cov_matrix[cycle, time, :, :] @ H.T + R
     K = cov_matrix[cycle, time, :, :] @ H.T @ np.linalg.pinv(S)
+
+    kalman_v.append(v)
+    kalman_S.append(S)
+    kalman_K.append(K)
 
     mean_vec[cycle + 1, time, :] += K @ v
     cov_matrix[cycle + 1, time, :, :] -= K @ S @ K.T
@@ -886,87 +886,81 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     )
 
     # recreate ensemble
-    if RESAMPLE_MODELS:
-        # create an entirely new set of model instances sampled from KF-learned distribution
-        model_ensemble = model_ensemble_from(
-            mean_vec[cycle + 1, time, :], cov_matrix[cycle + 1, time, :, :], transform=True
-        )
-    else:
-        dist = multivariate_normal(
-            mean=mean_vec[cycle + 1, time, :],
-            cov=cov_matrix[cycle + 1, time, :, :],
-            allow_singular=True,
-        )
-        if MODEL_MATCHMAKER:
-            new_sample = dist.rvs(size=ENSEMBLE_SIZE)
-            # Gale-Shapely matching algorithm to try and pair up the models and these new samples
+    dist = multivariate_normal(
+        mean=mean_vec[cycle + 1, time, :],
+        cov=cov_matrix[cycle + 1, time, :, :],
+        allow_singular=True,
+    )
+    if MODEL_MATCHMAKER:
+        new_sample = dist.rvs(size=ENSEMBLE_SIZE)
+        # Gale-Shapely matching algorithm to try and pair up the models and these new samples
 
-            # fill out preference lists for the models
-            prefs = np.zeros((ENSEMBLE_SIZE, ENSEMBLE_SIZE), dtype=np.int64)
-            for idx in range(ENSEMBLE_SIZE):
-                # noinspection PyUnboundLocalVariable
-                dists = np.linalg.norm(new_sample - macro_data[idx], axis=1)
-                prefs[idx, :] = np.argsort(dists)
+        # fill out preference lists for the models
+        prefs = np.zeros((ENSEMBLE_SIZE, ENSEMBLE_SIZE), dtype=np.int64)
+        for idx in range(ENSEMBLE_SIZE):
+            # noinspection PyUnboundLocalVariable
+            dists = np.linalg.norm(new_sample - macro_data[idx], axis=1)
+            prefs[idx, :] = np.argsort(dists)
 
-            # arrays to record pairings
-            model_to_sample_pairing = np.full(ENSEMBLE_SIZE, -1, dtype=np.int64)
-            sample_to_model_pairing = np.full(ENSEMBLE_SIZE, -1, dtype=np.int64)
+        # arrays to record pairings
+        model_to_sample_pairing = np.full(ENSEMBLE_SIZE, -1, dtype=np.int64)
+        sample_to_model_pairing = np.full(ENSEMBLE_SIZE, -1, dtype=np.int64)
 
-            all_paired = False
-            while not all_paired:
-                all_paired = True
-                for model_idx in range(ENSEMBLE_SIZE):
-                    if model_to_sample_pairing[model_idx] != -1:
-                        # skip already paired models
-                        continue
-                    # found an unpaired model, find the first thing not yet
-                    # checked on its preference list
-                    min_pref_idx = np.argmax(prefs[model_idx, :] >= 0)
-                    for pref_idx in range(min_pref_idx, ENSEMBLE_SIZE):
-                        possible_sample_pair = prefs[model_idx, pref_idx]
-                        competitor_model_idx = sample_to_model_pairing[possible_sample_pair]
-                        if competitor_model_idx == -1:
-                            # if the sample is unpaired, pair the two
+        all_paired = False
+        while not all_paired:
+            all_paired = True
+            for model_idx in range(ENSEMBLE_SIZE):
+                if model_to_sample_pairing[model_idx] != -1:
+                    # skip already paired models
+                    continue
+                # found an unpaired model, find the first thing not yet
+                # checked on its preference list
+                min_pref_idx = np.argmax(prefs[model_idx, :] >= 0)
+                for pref_idx in range(min_pref_idx, ENSEMBLE_SIZE):
+                    possible_sample_pair = prefs[model_idx, pref_idx]
+                    competitor_model_idx = sample_to_model_pairing[possible_sample_pair]
+                    if competitor_model_idx == -1:
+                        # if the sample is unpaired, pair the two
+                        sample_to_model_pairing[possible_sample_pair] = model_idx
+                        model_to_sample_pairing[model_idx] = possible_sample_pair
+                        # erase this possibility for future pairings
+                        prefs[model_idx, pref_idx] = -1
+                        break  # stop looking now
+                    else:
+                        # compare preferences
+                        established_pair_dist = np.linalg.norm(
+                            macro_data[competitor_model_idx, :]
+                            - new_sample[possible_sample_pair, :]
+                        )
+                        proposed_pair_dist = np.linalg.norm(
+                            macro_data[model_idx, :] - new_sample[possible_sample_pair, :]
+                        )
+                        if proposed_pair_dist < established_pair_dist:
+                            model_to_sample_pairing[
+                                competitor_model_idx
+                            ] = -1  # free the competitor
+                            all_paired = False
+                            # make new pair
                             sample_to_model_pairing[possible_sample_pair] = model_idx
                             model_to_sample_pairing[model_idx] = possible_sample_pair
                             # erase this possibility for future pairings
                             prefs[model_idx, pref_idx] = -1
                             break  # stop looking now
                         else:
-                            # compare preferences
-                            established_pair_dist = np.linalg.norm(
-                                macro_data[competitor_model_idx, :]
-                                - new_sample[possible_sample_pair, :]
-                            )
-                            proposed_pair_dist = np.linalg.norm(
-                                macro_data[model_idx, :] - new_sample[possible_sample_pair, :]
-                            )
-                            if proposed_pair_dist < established_pair_dist:
-                                model_to_sample_pairing[
-                                    competitor_model_idx
-                                ] = -1  # free the competitor
-                                all_paired = False
-                                # make new pair
-                                sample_to_model_pairing[possible_sample_pair] = model_idx
-                                model_to_sample_pairing[model_idx] = possible_sample_pair
-                                # erase this possibility for future pairings
-                                prefs[model_idx, pref_idx] = -1
-                                break  # stop looking now
-                            else:
-                                prefs[model_idx, pref_idx] = -1  # this one didn't work
-                                continue
+                            prefs[model_idx, pref_idx] = -1  # this one didn't work
+                            continue
 
-            # now do the model modifications
-            for model_idx in range(ENSEMBLE_SIZE):
-                modify_model(
-                    model_ensemble[model_idx],
-                    transform_kf_to_intrinsic(new_sample[model_to_sample_pairing[model_idx], :]),
-                )
-        else:
-            # sample from KF-learned dist and modify existing models to fit
-            for model in model_ensemble:
-                state = dist.rvs()
-                modify_model(model, transform_kf_to_intrinsic(state))
+        # now do the model modifications
+        for model_idx in range(ENSEMBLE_SIZE):
+            modify_model(
+                model_ensemble[model_idx],
+                transform_kf_to_intrinsic(new_sample[model_to_sample_pairing[model_idx], :]),
+            )
+    else:
+        # sample from KF-learned dist and modify existing models to fit
+        for model in model_ensemble:
+            state = dist.rvs()
+            modify_model(model, transform_kf_to_intrinsic(state))
 
 ################################################################################
 
@@ -998,7 +992,7 @@ if GRAPHS:
             (past_est_center_line,) = axs[idx].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx], indices=idx
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx], index=idx
                 ),
                 color="green",
                 label="estimate of past",
@@ -1010,7 +1004,7 @@ if GRAPHS:
                     transform_kf_to_intrinsic(
                         mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
                         - np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
-                        indices=idx,
+                        index=idx,
                     ),
                 ),
                 np.minimum(
@@ -1018,7 +1012,7 @@ if GRAPHS:
                     transform_kf_to_intrinsic(
                         mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
                         + np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
-                        indices=idx,
+                        index=idx,
                     ),
                 ),
                 color="green",
@@ -1028,7 +1022,7 @@ if GRAPHS:
             (future_est_before_update_center_line,) = axs[idx].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx], indices=idx
+                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx], index=idx
                 ),
                 color="#d5b60a",
                 label="previous future estimate",
@@ -1040,7 +1034,7 @@ if GRAPHS:
                     transform_kf_to_intrinsic(
                         mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
                         - np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-                        indices=idx,
+                        index=idx,
                     ),
                 ),
                 np.minimum(
@@ -1048,7 +1042,7 @@ if GRAPHS:
                     transform_kf_to_intrinsic(
                         mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
                         + np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-                        indices=idx,
+                        index=idx,
                     ),
                 ),
                 color="#d5b60a",
@@ -1058,7 +1052,7 @@ if GRAPHS:
             (future_est_after_update_center_line,) = axs[idx].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx], indices=idx
+                    mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx], index=idx
                 ),
                 label="updated future estimate",
                 color="blue",
@@ -1070,7 +1064,7 @@ if GRAPHS:
                     transform_kf_to_intrinsic(
                         mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx]
                         - np.sqrt(cov_matrix[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-                        indices=idx,
+                        index=idx,
                     ),
                 ),
                 np.minimum(
@@ -1078,7 +1072,7 @@ if GRAPHS:
                     transform_kf_to_intrinsic(
                         mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx]
                         + np.sqrt(cov_matrix[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-                        indices=idx,
+                        index=idx,
                     ),
                 ),
                 color="blue",
@@ -1144,7 +1138,7 @@ if GRAPHS:
             (past_est_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx], indices=3 + idx
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx], index=3 + idx
                 ),
                 label="estimate of past",
                 color="green",
@@ -1158,7 +1152,7 @@ if GRAPHS:
                         - np.sqrt(
                             cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 np.minimum(
@@ -1168,7 +1162,7 @@ if GRAPHS:
                         + np.sqrt(
                             cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 color="green",
@@ -1178,7 +1172,7 @@ if GRAPHS:
             (future_est_before_update_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx], indices=3 + idx
+                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx], index=3 + idx
                 ),
                 label="old estimate",
                 color="#d5b60a",
@@ -1192,7 +1186,7 @@ if GRAPHS:
                         - np.sqrt(
                             cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 np.minimum(
@@ -1202,7 +1196,7 @@ if GRAPHS:
                         + np.sqrt(
                             cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 color="#d5b60a",
@@ -1212,7 +1206,7 @@ if GRAPHS:
             (future_est_after_update_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 transform_kf_to_intrinsic(
-                    mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx], indices=3 + idx
+                    mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx], index=3 + idx
                 ),
                 label="updated estimate",
                 color="blue",
@@ -1226,7 +1220,7 @@ if GRAPHS:
                         - np.sqrt(
                             cov_matrix[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 np.minimum(
@@ -1236,7 +1230,7 @@ if GRAPHS:
                         + np.sqrt(
                             cov_matrix[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, 3 + idx, 3 + idx]
                         ),
-                        indices=3 + idx,
+                        index=3 + idx,
                     ),
                 ),
                 color="blue",
@@ -1372,18 +1366,6 @@ surprisal_param = (
     surprisal_param_quadratic_part + logdet + 5 * np.log(2 * np.pi)
 ) / 2.0  # 5 -> 5 params
 
-# average of state surprisal over all time
-# note: dt = 1 so integral is just mean
-surprisal_average_param = np.mean(surprisal_param, axis=1)
-
-# average of state surprisal over all _future_ times
-future_surprisal_average_param = np.array(
-    [
-        np.mean(surprisal_param[cycle, (cycle + 1) * SAMPLE_INTERVAL :])
-        for cycle in range(NUM_CYCLES - 1)
-    ]
-)
-
 ################################################################################
 
 # plt.plot( [ np.mean(surprisal_full[idx,50*idx:50*(idx+1)]) for idx in range(20)])
@@ -1442,3 +1424,7 @@ with h5py.File(FILE_PREFIX + "data.hdf5", "w") as f:
     f["surprisal_param_quad"] = surprisal_param_quadratic_part
     f["surprisal_param_quad"].dims[0].label = "kalman update number"
     f["surprisal_param_quad"].dims[1].label = "time"
+
+    f["kalman_v"] = np.array(kalman_v)
+    f["kalman_S"] = np.array(kalman_S)
+    f["kalman_K"] = np.array(kalman_K)
