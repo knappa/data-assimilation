@@ -8,6 +8,8 @@ import h5py
 import numpy as np
 from matplotlib import pyplot as plt
 
+from transform import transform_intrinsic_to_kf
+
 if hasattr(sys, "ps1"):
     # interactive mode
     args = object()
@@ -19,7 +21,6 @@ else:
 BULK = True if not hasattr(args, "bulk") or args.bulk is None else args.bulk
 
 if BULK:
-
     files = [f for f in os.listdir(".") if os.path.isfile(f) and f[-5:] == ".hdf5"]
 
     # get shapes
@@ -57,7 +58,7 @@ if BULK:
 
             means[file_idx] = h5file["means"][()]
             covs[file_idx] = h5file["covs"][()]
-            vp_traj[file_idx] = h5file["virtual_patient_trajectory"][()]
+            vp_traj[file_idx] = transform_intrinsic_to_kf(h5file["virtual_patient_trajectory"][()])
 
     print(f"number of sims with wolf extinction: {np.sum(final_wolves == 0.0)}")
 
@@ -167,30 +168,69 @@ if BULK:
         "sheep reproduce",
         "grass regrowth time",
     ]
-    fig, axs = plt.subplots(2)
+    fig, axs = plt.subplots(2, 2, sharex=True)
     for cpt_idx, cpt_name in enumerate(components):
         if cpt_idx < 3:
-            continue
+            row = 0
+        else:
+            row = 1
         cpt_surp = (
-                covs[..., cpt_idx, cpt_idx] ** -1 * (vp_traj[..., cpt_idx] ** 2)[:, np.newaxis, :]
+            covs[..., cpt_idx, cpt_idx] ** -1
+            * ((means[..., cpt_idx] - vp_traj[..., cpt_idx][:, np.newaxis, :]) ** 2)
             + np.log(covs[..., cpt_idx, cpt_idx])
         ) / 2.0
 
         cpt_surp_wolves = cpt_surp[final_wolves != 0.0]
-        cpt_surp_wolves_example_mean = np.mean(cpt_surp_wolves, axis=0, where=np.logical_not(np.isnan(cpt_surp_wolves)))
-        axs[0].plot(
-            ([np.mean(cpt_surp_wolves_example_mean[idx, 50 * idx : 50 * (idx + 1)]) for idx in range(20)]),
+        cpt_surp_wolves_example_mean = np.mean(
+            cpt_surp_wolves, axis=0, where=np.logical_not(np.isnan(cpt_surp_wolves))
+        )
+        axs[row, 0].plot(
+            (
+                [
+                    np.mean(cpt_surp_wolves_example_mean[idx, 50 * idx : 50 * (idx + 1)])
+                    for idx in range(20)
+                ]
+            ),
             label=cpt_name,
         )
-        axs[0].set_title("wolves")
+        axs[row, 0].set_title("wolves")
 
         cpt_surp_no_wolves = cpt_surp[final_wolves == 0.0]
-        cpt_surp_no_wolves_example_mean = np.mean(cpt_surp_no_wolves, axis=0, where=np.logical_not(np.isnan(cpt_surp_no_wolves)))
-        axs[1].plot(
-            ([np.mean(cpt_surp_no_wolves_example_mean[idx, 50 * idx: 50 * (idx + 1)]) for idx in range(20)]),
+        cpt_surp_no_wolves_example_mean = np.mean(
+            cpt_surp_no_wolves, axis=0, where=np.logical_not(np.isnan(cpt_surp_no_wolves))
+        )
+        axs[row, 1].plot(
+            (
+                [
+                    np.mean(cpt_surp_no_wolves_example_mean[idx, 50 * idx : 50 * (idx + 1)])
+                    for idx in range(20)
+                ]
+            ),
             label=cpt_name,
         )
-        axs[1].set_title("no wolves")
+        axs[row, 1].set_title("no wolves")
+    axs[0, 0].legend()
+    axs[1, 0].legend()
+    fig.savefig("surprisals-components.pdf")
+
+    fig, axs = plt.subplots(2, sharex=True)
+    for cpt_idx, cpt_name in enumerate(components):
+        if cpt_idx < 3:
+            row = 0
+        else:
+            row = 1
+
+        cpt_dist = (means[..., cpt_idx] - vp_traj[..., cpt_idx][:, np.newaxis, :]) ** 2
+        mean_prop_dist = np.mean(cpt_dist / cpt_dist[:, :, 0][:, :, np.newaxis], axis=0)
+        cycle_prop_dist = np.array(
+            [np.sqrt(np.mean(mean_prop_dist[idx, 50 * idx : 50 * (idx + 1)])) for idx in range(20)]
+        )
+
+        axs[row].plot(
+            (cycle_prop_dist),
+            label=cpt_name,
+        )
+
     axs[0].legend()
     axs[1].legend()
     fig.savefig("surprisals-components.pdf")
