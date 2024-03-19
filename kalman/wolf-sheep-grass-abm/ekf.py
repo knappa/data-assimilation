@@ -304,6 +304,7 @@ virtual_patient_model = WolfSheepGrassModel(
     WOLF_REPRODUCE=vp_wolf_reproduce,
     SHEEP_REPRODUCE=vp_sheep_reproduce,
     GRASS_REGROWTH_TIME=vp_grass_regrowth_time,
+    SOFTCAP_AGENT_NUM_AT_GRID_SIZE=True,
 )
 
 # evaluate the virtual patient's trajectory
