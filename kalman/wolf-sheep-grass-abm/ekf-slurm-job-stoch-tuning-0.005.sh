@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=ekf-st                   # Job name
+#SBATCH --job-name=st-0.005                   # Job name
 #SBATCH --mail-type=ALL                     # Mail events (NONE, BEGIN, END, FAIL, ALL)
 #SBATCH --mail-user=adam.knapp@ufl.edu      # Where to send mail
 #SBATCH --nodes=1                           # Use one node (non-MPI)
@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem-per-cpu=3gb                   # Memory per job
 #SBATCH --time=72:00:00                     # Time limit hrs:min:sec
-#SBATCH --output=ekf-st-array_%A-%a.out  # Standard output and error log
+#SBATCH --output=ekf-st-0.005-array_%A-%a.out  # Standard output and error log
 #SBATCH --array=0-999                       # Array range
 # This is an example script that combines array tasks with
 # bash loops to process many short runs. Array jobs are convenient
