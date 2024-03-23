@@ -132,7 +132,7 @@ rs: Final[Dict[str, float]] = {
         "IL8",
         "IL10",
         "IL12",
-        "IL8",
+        "IL18",
         "extracellular_virus",
     ]
 }
