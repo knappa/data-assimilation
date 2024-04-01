@@ -1,3 +1,5 @@
+from typing import Tuple
+
 import numpy as np
 import scipy
 from an_cockrell import AnCockrellModel
@@ -227,3 +229,21 @@ def fix_title(s: str, *, break_len=14):
         if idx != -1:
             s = s[:idx] + "\n" + s[idx + 1 :]
     return s
+
+
+################################################################################
+
+
+def slogdet(m: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Compute the log of the absolute value of the determinant. Adapted to singular case.
+
+    :param m: (..., M, M) array like
+    :return: abs-logdet
+    """
+    evals = np.linalg.eigvals(m)
+    signs = np.prod(np.sign(evals), axis=-1)
+
+    return signs, np.nan_to_num(
+        np.sum(np.nan_to_num(np.log(np.maximum(1e-10, np.abs(evals)))), axis=-1)
+    )

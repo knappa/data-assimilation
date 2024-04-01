@@ -20,7 +20,14 @@ from consts import (
     state_vars,
     variational_params,
 )
-from util import cov_cleanup, fix_title, gale_shapely_matching, model_macro_data
+from transform import transform_intrinsic_to_kf, transform_kf_to_intrinsic
+from util import (
+    cov_cleanup,
+    fix_title,
+    gale_shapely_matching,
+    model_macro_data,
+    slogdet,
+)
 
 ################################################################################
 
@@ -64,21 +71,29 @@ else:
 
     # parameters for the measurement uncertainty (coeffs in the Kalman filter's R matrix)
     parser.add_argument(
-        "--uncertainty-P_DAMPS", type=float, default=1.0, required=False
+        "--uncertainty-P_DAMPS", type=float, default=0.001, required=False
     )
-    parser.add_argument("--uncertainty-T1IFN", type=float, default=1.0, required=False)
-    parser.add_argument("--uncertainty-TNF", type=float, default=1.0, required=False)
-    parser.add_argument("--uncertainty-IFNg", type=float, default=1.0, required=False)
-    parser.add_argument("--uncertainty-IL6", type=float, default=1.0, required=False)
-    parser.add_argument("--uncertainty-IL1", type=float, default=1.0, required=False)
-    parser.add_argument("--uncertainty-IL8", type=float, default=1.0, required=False)
-    parser.add_argument("--uncertainty-IL10", type=float, default=1.0, required=False)
-    parser.add_argument("--uncertainty-IL12", type=float, default=1.0, required=False)
-    parser.add_argument("--uncertainty-IL18", type=float, default=1.0, required=False)
     parser.add_argument(
-        "--uncertainty-extracellular_virus", type=float, default=1.0, required=False
+        "--uncertainty-T1IFN", type=float, default=0.001, required=False
+    )
+    parser.add_argument("--uncertainty-TNF", type=float, default=0.001, required=False)
+    parser.add_argument("--uncertainty-IFNg", type=float, default=0.001, required=False)
+    parser.add_argument("--uncertainty-IL6", type=float, default=0.001, required=False)
+    parser.add_argument("--uncertainty-IL1", type=float, default=0.001, required=False)
+    parser.add_argument("--uncertainty-IL8", type=float, default=0.001, required=False)
+    parser.add_argument("--uncertainty-IL10", type=float, default=0.001, required=False)
+    parser.add_argument("--uncertainty-IL12", type=float, default=0.001, required=False)
+    parser.add_argument("--uncertainty-IL18", type=float, default=0.001, required=False)
+    parser.add_argument(
+        "--uncertainty-extracellular_virus", type=float, default=0.001, required=False
     )
 
+    parser.add_argument(
+        "--param_stoch_level",
+        help="stochasticity parameter for parameter random walk",
+        type=float,
+        default=0.001,
+    )
     parser.add_argument(
         "--verbose", help="print extra diagnostic messages", action="store_true"
     )
@@ -137,6 +152,13 @@ rs: Final[Dict[str, float]] = {
     ]
 }
 
+PARAM_STOCH_LEVEL: Final[float] = (
+    0.001
+    if not hasattr(args, "param_stoch_level")
+    or args.param_stoch_level is None
+    or args.param_stoch_level == -1
+    else args.param_stoch_level
+)
 
 ENSEMBLE_SIZE: Final[int] = (
     (UNIFIED_STATE_SPACE_DIMENSION + 1) * UNIFIED_STATE_SPACE_DIMENSION // 2
@@ -325,27 +347,29 @@ cov_matrix = np.full(
 
 # collect initial statistics
 time = 0
-macro_data = np.array([model_macro_data(model) for model in model_ensemble])
+macro_data = np.array(
+    [transform_intrinsic_to_kf(model_macro_data(model)) for model in model_ensemble]
+)
 mean_vec[time, :] = np.mean(macro_data, axis=0)
 cov_matrix[time, :, :] = np.cov(macro_data, rowvar=False)
 
-for cycle in tqdm(range(NUM_CYCLES), desc="cycle #"):
+for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     # advance ensemble of models
     for _ in tqdm(range(SAMPLE_INTERVAL), desc="time steps to prediction"):
         for model in model_ensemble:
             model.time_step()
             if PARAMETER_RANDOM_WALK:
-                macrostate = model_macro_data(model)
+                macrostate = transform_intrinsic_to_kf(model_macro_data(model))
                 random_walk_macrostate = np.abs(
                     macrostate
                     + multivariate_normal(
                         mean=np.zeros_like(macrostate),
-                        cov=np.diag(0.01 * np.ones_like(macrostate)),
+                        cov=np.diag(PARAM_STOCH_LEVEL * np.ones_like(macrostate)),
                     ).rvs()
                 )
                 modify_model(
                     model,
-                    random_walk_macrostate,
+                    transform_kf_to_intrinsic(random_walk_macrostate),
                     ignore_state_vars=True,
                     verbose=VERBOSE,
                     state_var_indices=state_var_indices,
@@ -353,17 +377,25 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle #"):
                     variational_params=variational_params,
                 )
         time += 1
-        macro_data = np.array([model_macro_data(model) for model in model_ensemble])
+        macro_data = np.array(
+            [
+                transform_intrinsic_to_kf(model_macro_data(model))
+                for model in model_ensemble
+            ]
+        )
         mean_vec[cycle:, time, :] = np.mean(macro_data, axis=0)
         cov_matrix[cycle:, time, :, :] = np.cov(macro_data, rowvar=False)
 
     # make copy of the models and advance them to the end of the simulation time
     model_ensemble_copy = deepcopy(model_ensemble)
-    for future_time in tqdm(range(time, TIME_SPAN + 1), desc="time steps to end"):
+    for future_time in tqdm(
+        range(time, min(time + SAMPLE_INTERVAL + 1, TIME_SPAN + 1)),
+        desc="time steps past",
+    ):
         for model in model_ensemble_copy:
             model.time_step()
             if PARAMETER_RANDOM_WALK:
-                macrostate = model_macro_data(model)
+                macrostate = transform_intrinsic_to_kf(model_macro_data(model))
                 random_walk_macrostate = np.abs(
                     macrostate
                     + multivariate_normal(
@@ -373,7 +405,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle #"):
                 )
                 modify_model(
                     model,
-                    random_walk_macrostate,
+                    transform_kf_to_intrinsic(random_walk_macrostate),
                     ignore_state_vars=True,
                     verbose=VERBOSE,
                     state_var_indices=state_var_indices,
@@ -381,7 +413,10 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle #"):
                     variational_params=variational_params,
                 )
         macro_data = np.array(
-            [model_macro_data(model) for model in model_ensemble_copy]
+            [
+                transform_intrinsic_to_kf(model_macro_data(model))
+                for model in model_ensemble_copy
+            ]
         )
         mean_vec[cycle:, future_time, :] = np.mean(macro_data, axis=0)
         cov_matrix[cycle:, future_time, :, :] = np.cov(macro_data, rowvar=False)
@@ -400,63 +435,69 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle #"):
         )
         for idx, state_var_name in enumerate(state_vars):
             row, col = divmod(idx, state_var_graphs_cols)
-            axs[row, col].plot(
+            (true_value,) = axs[row, col].plot(
                 range(TIME_SPAN + 1),
                 vp_trajectory[:, idx],
                 label="true value",
+                linestyle=":",
+                color="gray",
+            )
+            (past_estimate_center_line,) = axs[idx].plot(
+                range((cycle + 1) * SAMPLE_INTERVAL),
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx], index=idx
+                ),
+                label="estimate of past",
                 color="black",
             )
-            axs[row, col].plot(
-                range(TIME_SPAN + 1),
-                mean_vec[cycle, :, idx],
-                label="estimate",
-            )
-            axs[row, col].fill_between(
-                range((cycle + 1) * SAMPLE_INTERVAL + 1),
-                np.maximum(
-                    0.0,
-                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL + 1, idx]
+            past_estimate_range = axs[row, col].fill_between(
+                range((cycle + 1) * SAMPLE_INTERVAL),
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
                     - np.sqrt(
-                        cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL + 1, idx, idx]
+                        cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]
                     ),
+                    index=idx,
                 ),
-                mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL + 1, idx]
-                + np.sqrt(
-                    cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL + 1, idx, idx]
+                # np.minimum(
+                #     10 * max_scales[state_var_name],
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
+                    + np.sqrt(
+                        cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]
+                    ),
+                    index=idx,
                 ),
+                # ),
                 color="gray",
                 alpha=0.35,
-                label="past cone of uncertainty",
             )
-            axs[row, col].fill_between(
+
+            mu = mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
+            sigma = np.sqrt(
+                cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]
+            )
+
+            (prediction_center_line,) = axs[idx].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                np.maximum(
-                    0.0,
-                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-                    - np.sqrt(
-                        cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]
-                    ),
+                transform_kf_to_intrinsic(mu, index=idx),
+                label="prediction",
+                color="blue",
+            )
+            prediction_range = axs[idx].fill_between(
+                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+                transform_kf_to_intrinsic(mu - sigma, index=idx),
+                # np.minimum(
+                #     10 * max_scales[state_var_name],
+                transform_kf_to_intrinsic(
+                    mu + sigma,
+                    index=idx,
                 ),
-                mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-                + np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-                color="red",  # TODO: pick better color
+                # ),
+                color="blue",
                 alpha=0.35,
-                label="future cone of uncertainty",
             )
-            axs[row, col].set_title(fix_title(state_var_name), loc="center", wrap=True)
-            # fix y-range for the case where the variance is overwhelming
-            ymax = min(
-                axs[row, col].get_ylim()[1],
-                max(
-                    1.1
-                    * np.max(vp_trajectory[: (cycle + 1) * SAMPLE_INTERVAL + 1, idx]),
-                    1.1
-                    * np.max(mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL + 1, idx]),
-                ),
-            )
-            if ymax == 0:
-                ymax = 1.0
-            axs[row, col].set_ylim([0, ymax])
+            axs[idx].set_title(state_var_name, loc="left")
         # remove axes on unused graphs
         for idx in range(
             len(state_vars),
@@ -464,14 +505,29 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle #"):
         ):
             row, col = divmod(idx, state_var_graphs_cols)
             axs[row, col].set_axis_off()
-        handles, labels = axs[0, 0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="outside lower right")
+
+        # noinspection PyUnboundLocalVariable
+        fig.legend(
+            [
+                true_value,
+                (past_estimate_center_line, past_estimate_range),
+                (prediction_center_line, prediction_range),
+            ],
+            [
+                true_value.get_label(),
+                past_estimate_center_line.get_label(),
+                prediction_center_line.get_label(),
+            ],
+            # loc="outside upper right",
+        )
+        fig.suptitle("State Prediction")
         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-state.pdf")
         plt.close(fig)
 
     ################################################################################
     # plot projection of parameters
 
+    len_state_vars = len(state_vars)
     if GRAPHS:
         fig, axs = plt.subplots(
             nrows=variational_params_graphs_rows,
@@ -485,105 +541,108 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle #"):
             row, col = divmod(idx, variational_params_graphs_cols)
 
             if param_name in vp_init_params:
-                axs[row, col].plot(
+                (true_value,) = axs[row, col].plot(
                     [0, TIME_SPAN + 1],
                     [vp_init_params[param_name]] * 2,
                     label="true value",
-                    color="black",
+                    color="gray",
+                    linestyle=":",
                 )
-            axs[row, col].plot(
-                range(TIME_SPAN + 1),
-                mean_vec[cycle, :, len(state_vars) + idx],
-                label="estimate",
-            )
-            axs[row, col].fill_between(
+
+            (past_estimate_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL),
-                np.maximum(
-                    0.0,
+                transform_kf_to_intrinsic(
                     mean_vec[
-                        cycle, : (cycle + 1) * SAMPLE_INTERVAL, len(state_vars) + idx
+                        cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
+                    ],
+                    index=len_state_vars + idx,
+                ),
+                color="black",
+                label="estimate of past",
+            )
+
+            past_estimate_range = axs[row, col].fill_between(
+                range((cycle + 1) * SAMPLE_INTERVAL),
+                transform_kf_to_intrinsic(
+                    mean_vec[
+                        cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
                     ]
                     - np.sqrt(
                         cov_matrix[
                             cycle,
                             : (cycle + 1) * SAMPLE_INTERVAL,
-                            len(state_vars) + idx,
-                            len(state_vars) + idx,
+                            len_state_vars + idx,
+                            len_state_vars + idx,
                         ]
                     ),
+                    index=len_state_vars + idx,
                 ),
-                np.minimum(
-                    (
-                        10 * vp_init_params[param_name]
-                        if param_name in vp_init_params
-                        else float("inf")
-                    ),
+                transform_kf_to_intrinsic(
                     mean_vec[
-                        cycle, : (cycle + 1) * SAMPLE_INTERVAL, len(state_vars) + idx
+                        cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
                     ]
                     + np.sqrt(
                         cov_matrix[
                             cycle,
                             : (cycle + 1) * SAMPLE_INTERVAL,
-                            len(state_vars) + idx,
-                            len(state_vars) + idx,
+                            len_state_vars + idx,
+                            len_state_vars + idx,
                         ]
                     ),
+                    index=len_state_vars + idx,
                 ),
                 color="gray",
                 alpha=0.35,
                 label="past cone of uncertainty",
             )
-            axs[row, col].fill_between(
+
+            (prediction_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                np.maximum(
-                    0.0,
+                transform_kf_to_intrinsic(
                     mean_vec[
-                        cycle, (cycle + 1) * SAMPLE_INTERVAL :, len(state_vars) + idx
+                        cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
+                    ],
+                    index=len_state_vars + idx,
+                ),
+                label="predictive estimate",
+                color="blue",
+            )
+
+            prediction_range = axs[row, col].fill_between(
+                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+                transform_kf_to_intrinsic(
+                    mean_vec[
+                        cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
                     ]
                     - np.sqrt(
                         cov_matrix[
                             cycle,
                             (cycle + 1) * SAMPLE_INTERVAL :,
-                            len(state_vars) + idx,
-                            len(state_vars) + idx,
+                            len_state_vars + idx,
+                            len_state_vars + idx,
                         ]
                     ),
+                    index=len_state_vars + idx,
                 ),
-                np.minimum(
-                    (
-                        10 * vp_init_params[param_name]
-                        if param_name in vp_init_params
-                        else float("inf")
-                    ),
+                transform_kf_to_intrinsic(
                     mean_vec[
-                        cycle, (cycle + 1) * SAMPLE_INTERVAL :, len(state_vars) + idx
+                        cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
                     ]
                     + np.sqrt(
                         cov_matrix[
                             cycle,
                             (cycle + 1) * SAMPLE_INTERVAL :,
-                            len(state_vars) + idx,
-                            len(state_vars) + idx,
+                            len_state_vars + idx,
+                            len_state_vars + idx,
                         ]
                     ),
+                    index=len_state_vars + idx,
                 ),
-                color="red",  # TODO: pick better color
+                color="blue",
                 alpha=0.35,
-                label="future cone of uncertainty",
             )
-            axs[row, col].set_title(fix_title(param_name), loc="center", wrap=True)
-            ymax = 1.1 * max(
-                np.max(
-                    vp_trajectory[
-                        : (cycle + 1) * SAMPLE_INTERVAL + 1, len(state_vars) + idx
-                    ]
-                ),
-                np.max(mean_vec[: cycle * SAMPLE_INTERVAL + 1, len(state_vars) + idx]),
-            )
-            if ymax == 0:
-                ymax = 1.0
-            axs[row, col].set_ylim([0, ymax])
+            axs[row, col].set_title(param_name)
+
         # remove axes on unused graphs
         for idx in range(
             len(variational_params),
@@ -592,8 +651,20 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle #"):
             row, col = divmod(idx, variational_params_graphs_cols)
             axs[row, col].set_axis_off()
 
-        handles, labels = axs[0, 0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="outside lower right")
+        fig.legend(
+            [
+                true_value,
+                (past_estimate_center_line, past_estimate_range),
+                (prediction_center_line, prediction_range),
+            ],
+            [
+                true_value.get_label(),
+                past_estimate_center_line.get_label(),
+                prediction_center_line.get_label(),
+            ],
+            loc="outside lower right",
+        )
+        fig.suptitle("Parameter Projection")
         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-params.pdf")
         plt.close(fig)
 
@@ -610,7 +681,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle #"):
 
     observation = np.array(
         [
-            vp_trajectory[time, state_var_indices[obs_name]]
+            transform_intrinsic_to_kf(vp_trajectory[time, state_var_indices[obs_name]])
             for obs_name in OBSERVABLE_VAR_NAMES
         ],
         dtype=np.float64,
@@ -667,87 +738,111 @@ if GRAPHS:
         )
         for idx, state_var_name in enumerate(state_vars):
             row, col = divmod(idx, state_var_graphs_cols)
-            axs[row, col].plot(
+
+            (true_value,) = axs[row, col].plot(
                 range(TIME_SPAN + 1),
                 vp_trajectory[:, idx],
                 label="true value",
                 color="black",
             )
 
-            axs[row, col].plot(
-                range(TIME_SPAN + 1),
-                mean_vec[cycle, :, idx],
-                label="old estimate",
-            )
-            axs[row, col].plot(
-                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx],
-                label="updated estimate",
-                color="red",
+            (past_est_center_line,) = axs[idx].plot(
+                range((cycle + 1) * SAMPLE_INTERVAL),
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx], index=idx
+                ),
+                color="green",
+                label="estimate of past",
             )
 
-            axs[row, col].fill_between(
-                range((cycle + 1) * SAMPLE_INTERVAL + 1),
+            past_est_range = axs[row, col].fill_between(
+                range((cycle + 1) * SAMPLE_INTERVAL),
                 np.maximum(
                     0.0,
-                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL + 1, idx]
-                    - np.sqrt(
-                        cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL + 1, idx, idx]
+                    transform_kf_to_intrinsic(
+                        mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
+                        - np.sqrt(
+                            cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]
+                        ),
+                        index=idx,
                     ),
                 ),
-                mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL + 1, idx]
-                + np.sqrt(
-                    cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL + 1, idx, idx]
-                ),
-                color="gray",
-                alpha=0.35,
-                label="past cone of uncertainty",
-            )
-            axs[row, col].fill_between(
-                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                np.maximum(
-                    0.0,
-                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-                    - np.sqrt(
-                        cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
+                    + np.sqrt(
+                        cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]
                     ),
+                    index=idx,
                 ),
-                mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-                + np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-                color="red",  # TODO: pick better color
+                color="green",
                 alpha=0.35,
-                label="old future cone of uncertainty",
-            )
-            axs[row, col].fill_between(
-                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                np.maximum(
-                    0.0,
-                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-                    - np.sqrt(
-                        cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]
-                    ),
-                ),
-                mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-                + np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-                color="green",  # TODO: pick better color
-                alpha=0.35,
-                label="new future cone of uncertainty",
             )
 
-            axs[row, col].set_title(fix_title(state_var_name), loc="center", wrap=True)
-            # fix y-range for the case where the variance is overwhelming
-            ymax = min(
-                axs[row, col].get_ylim()[1],
-                max(
-                    1.1
-                    * np.max(vp_trajectory[: (cycle + 1) * SAMPLE_INTERVAL + 1, idx]),
-                    1.1
-                    * np.max(mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL + 1, idx]),
+            (future_est_before_update_center_line,) = axs[row, col].plot(
+                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx], index=idx
                 ),
+                color="#d5b60a",
+                label="previous future estimate",
             )
-            if ymax == 0:
-                ymax = 1.0
-            axs[row, col].set_ylim([0, ymax])
+            future_est_before_update_range = axs[row, col].fill_between(
+                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+                np.maximum(
+                    0.0,
+                    transform_kf_to_intrinsic(
+                        mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
+                        - np.sqrt(
+                            cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]
+                        ),
+                        index=idx,
+                    ),
+                ),
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
+                    + np.sqrt(
+                        cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]
+                    ),
+                    index=idx,
+                ),
+                color="#d5b60a",
+                alpha=0.35,
+            )
+
+            (future_est_after_update_center_line,) = axs[row, col].plot(
+                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx], index=idx
+                ),
+                label="updated future estimate",
+                color="blue",
+            )
+
+            future_est_after_update_range = axs[row, col].fill_between(
+                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+                np.maximum(
+                    0.0,
+                    transform_kf_to_intrinsic(
+                        mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx]
+                        - np.sqrt(
+                            cov_matrix[
+                                cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx
+                            ]
+                        ),
+                        index=idx,
+                    ),
+                ),
+                transform_kf_to_intrinsic(
+                    mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx]
+                    + np.sqrt(
+                        cov_matrix[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]
+                    ),
+                    index=idx,
+                ),
+                color="blue",
+                alpha=0.35,
+            )
+            axs[row, col].set_title(state_var_name, loc="left")
         # remove axes on unused graphs
         for idx in range(
             len(state_vars),
@@ -755,8 +850,24 @@ if GRAPHS:
         ):
             row, col = divmod(idx, state_var_graphs_cols)
             axs[row, col].set_axis_off()
-        handles, labels = axs[0, 0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="outside lower right")
+
+        # noinspection PyUnboundLocalVariable
+        fig.legend(
+            [
+                true_value,
+                (past_est_center_line, past_est_range),
+                (future_est_before_update_center_line, future_est_before_update_range),
+                (future_est_after_update_center_line, future_est_after_update_range),
+            ],
+            [
+                true_value.get_label(),
+                past_est_center_line.get_label(),
+                future_est_before_update_center_line.get_label(),
+                future_est_after_update_center_line.get_label(),
+            ],
+            loc="outside lower center",
+        )
+        fig.suptitle("State Projection", ha="left")
         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-state-kfupd.pdf")
         plt.close(fig)
 
@@ -764,6 +875,7 @@ if GRAPHS:
 # plot kalman update of parameters
 
 if GRAPHS:
+    len_state_vars = len(state_vars)
     for cycle in range(NUM_CYCLES - 1):
         fig, axs = plt.subplots(
             nrows=variational_params_graphs_rows,
@@ -777,158 +889,164 @@ if GRAPHS:
             row, col = divmod(idx, variational_params_graphs_cols)
 
             if param_name in vp_init_params:
-                axs[row, col].plot(
+                (true_value,) = axs[row, col].plot(
                     [0, TIME_SPAN + 1],
                     [vp_init_params[param_name]] * 2,
                     label="true value",
                     color="black",
                 )
 
-            axs[row, col].plot(
-                range(TIME_SPAN + 1),
-                mean_vec[cycle, :, len(state_vars) + idx],
-                label="old estimate",
-            )
-            axs[row, col].plot(
-                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                mean_vec[
-                    cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, len(state_vars) + idx
-                ],
-                label="updated estimate",
-                color="red",
+            (past_est_center_line,) = axs[row, col].plot(
+                range((cycle + 1) * SAMPLE_INTERVAL),
+                transform_kf_to_intrinsic(
+                    mean_vec[
+                        cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
+                    ],
+                    index=len_state_vars + idx,
+                ),
+                label="estimate of past",
+                color="green",
             )
 
-            axs[row, col].fill_between(
+            past_est_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 np.maximum(
                     0.0,
-                    mean_vec[
-                        cycle, : (cycle + 1) * SAMPLE_INTERVAL, len(state_vars) + idx
-                    ]
-                    - np.sqrt(
-                        cov_matrix[
-                            cycle,
-                            : (cycle + 1) * SAMPLE_INTERVAL,
-                            len(state_vars) + idx,
-                            len(state_vars) + idx,
+                    transform_kf_to_intrinsic(
+                        mean_vec[
+                            cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
                         ]
+                        - np.sqrt(
+                            cov_matrix[
+                                cycle,
+                                : (cycle + 1) * SAMPLE_INTERVAL,
+                                len_state_vars + idx,
+                                len_state_vars + idx,
+                            ]
+                        ),
+                        index=len_state_vars + idx,
                     ),
                 ),
-                np.minimum(
-                    (
-                        10 * vp_init_params[param_name]
-                        if param_name in vp_init_params
-                        else float("inf")
-                    ),
+                transform_kf_to_intrinsic(
                     mean_vec[
-                        cycle, : (cycle + 1) * SAMPLE_INTERVAL, len(state_vars) + idx
+                        cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
                     ]
                     + np.sqrt(
                         cov_matrix[
                             cycle,
                             : (cycle + 1) * SAMPLE_INTERVAL,
-                            len(state_vars) + idx,
-                            len(state_vars) + idx,
+                            len_state_vars + idx,
+                            len_state_vars + idx,
                         ]
                     ),
+                    index=len_state_vars + idx,
                 ),
-                color="gray",
+                color="green",
                 alpha=0.35,
-                label="past cone of uncertainty",
             )
-            axs[row, col].fill_between(
+
+            (future_est_before_update_center_line,) = axs[row, col].plot(
+                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+                transform_kf_to_intrinsic(
+                    mean_vec[
+                        cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
+                    ],
+                    index=len_state_vars + idx,
+                ),
+                label="old estimate",
+                color="#d5b60a",
+            )
+
+            future_est_before_update_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 np.maximum(
                     0.0,
-                    mean_vec[
-                        cycle, (cycle + 1) * SAMPLE_INTERVAL :, len(state_vars) + idx
-                    ]
-                    - np.sqrt(
-                        cov_matrix[
-                            cycle,
-                            (cycle + 1) * SAMPLE_INTERVAL :,
-                            len(state_vars) + idx,
-                            len(state_vars) + idx,
+                    transform_kf_to_intrinsic(
+                        mean_vec[
+                            cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
                         ]
+                        - np.sqrt(
+                            cov_matrix[
+                                cycle,
+                                (cycle + 1) * SAMPLE_INTERVAL :,
+                                len_state_vars + idx,
+                                len_state_vars + idx,
+                            ]
+                        ),
+                        index=len_state_vars + idx,
                     ),
                 ),
-                np.minimum(
-                    (
-                        10 * vp_init_params[param_name]
-                        if param_name in vp_init_params
-                        else float("inf")
-                    ),
+                transform_kf_to_intrinsic(
                     mean_vec[
-                        cycle, (cycle + 1) * SAMPLE_INTERVAL :, len(state_vars) + idx
+                        cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
                     ]
                     + np.sqrt(
                         cov_matrix[
                             cycle,
                             (cycle + 1) * SAMPLE_INTERVAL :,
-                            len(state_vars) + idx,
-                            len(state_vars) + idx,
+                            len_state_vars + idx,
+                            len_state_vars + idx,
                         ]
                     ),
+                    index=len_state_vars + idx,
                 ),
-                color="red",  # TODO: pick better color
+                color="#d5b60a",
                 alpha=0.35,
-                label="old future cone of uncertainty",
             )
-            axs[row, col].fill_between(
+
+            (future_est_after_update_center_line,) = axs[row, col].plot(
+                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+                transform_kf_to_intrinsic(
+                    mean_vec[
+                        cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
+                    ],
+                    index=len_state_vars + idx,
+                ),
+                label="updated estimate",
+                color="blue",
+            )
+
+            future_est_after_update_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 np.maximum(
                     0.0,
-                    mean_vec[
-                        cycle + 1,
-                        (cycle + 1) * SAMPLE_INTERVAL :,
-                        len(state_vars) + idx,
-                    ]
-                    - np.sqrt(
-                        cov_matrix[
+                    transform_kf_to_intrinsic(
+                        mean_vec[
                             cycle + 1,
                             (cycle + 1) * SAMPLE_INTERVAL :,
-                            len(state_vars) + idx,
-                            len(state_vars) + idx,
+                            len_state_vars + idx,
                         ]
+                        - np.sqrt(
+                            cov_matrix[
+                                cycle + 1,
+                                (cycle + 1) * SAMPLE_INTERVAL :,
+                                len_state_vars + idx,
+                                len_state_vars + idx,
+                            ]
+                        ),
+                        index=len_state_vars + idx,
                     ),
                 ),
-                np.minimum(
-                    (
-                        10 * vp_init_params[param_name]
-                        if param_name in vp_init_params
-                        else float("inf")
-                    ),
+                transform_kf_to_intrinsic(
                     mean_vec[
-                        cycle + 1,
-                        (cycle + 1) * SAMPLE_INTERVAL :,
-                        len(state_vars) + idx,
+                        cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
                     ]
                     + np.sqrt(
                         cov_matrix[
                             cycle + 1,
                             (cycle + 1) * SAMPLE_INTERVAL :,
-                            len(state_vars) + idx,
-                            len(state_vars) + idx,
+                            len_state_vars + idx,
+                            len_state_vars + idx,
                         ]
                     ),
+                    index=len_state_vars + idx,
                 ),
-                color="green",  # TODO: pick better color
+                color="blue",
                 alpha=0.35,
                 label="new future cone of uncertainty",
             )
+            axs[row, col].set_title(param_name)
 
-            axs[row, col].set_title(fix_title(param_name), loc="center", wrap=True)
-            ymax = 1.1 * max(
-                np.max(
-                    vp_trajectory[
-                        : (cycle + 1) * SAMPLE_INTERVAL + 1, len(state_vars) + idx
-                    ]
-                ),
-                np.max(mean_vec[: cycle * SAMPLE_INTERVAL + 1, len(state_vars) + idx]),
-            )
-            if ymax == 0:
-                ymax = 1.0
-            axs[row, col].set_ylim([0, ymax])
         # remove axes on unused graphs
         for idx in range(
             len(variational_params),
@@ -937,8 +1055,22 @@ if GRAPHS:
             row, col = divmod(idx, variational_params_graphs_cols)
             axs[row, col].set_axis_off()
 
-        handles, labels = axs[0, 0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="outside lower right")
+        fig.legend(
+            [
+                true_value,
+                (past_est_center_line, past_est_range),
+                (future_est_before_update_center_line, future_est_before_update_range),
+                (future_est_after_update_center_line, future_est_after_update_range),
+            ],
+            [
+                true_value.get_label(),
+                past_est_center_line.get_label(),
+                future_est_before_update_center_line.get_label(),
+                future_est_after_update_center_line.get_label(),
+            ],
+            loc="lower right",
+        )
+        fig.suptitle("Parameter Projection", x=0, ha="left")
         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-params-kfupd.pdf")
         plt.close(fig)
 
@@ -947,8 +1079,8 @@ if GRAPHS:
 
 #####
 # full surprisal: all state vars and params
-delta_full = mean_vec - vp_trajectory
-_, logdet = np.linalg.slogdet(cov_matrix)
+delta_full = mean_vec - transform_intrinsic_to_kf(vp_trajectory)
+_, logdet = slogdet(cov_matrix)
 sigma_inv_delta = np.array(
     [
         [
@@ -982,7 +1114,7 @@ future_surprisal_average_full = np.array(
 #####
 # state surprisal: restrict to just the state vars
 delta_state = mean_vec[:, :, : len(state_vars)] - vp_trajectory[:, : len(state_vars)]
-_, logdet = np.linalg.slogdet(cov_matrix[:, :, : len(state_vars), : len(state_vars)])
+_, logdet = slogdet(cov_matrix[:, :, : len(state_vars), : len(state_vars)])
 sigma_inv_delta = np.array(
     [
         [
@@ -1017,7 +1149,7 @@ future_surprisal_average_state = np.array(
 vp_param_trajectory = vp_trajectory[:, len(state_vars) :]
 
 delta_param = mean_vec[:, :, len(state_vars) :] - vp_param_trajectory
-_, logdet = np.linalg.slogdet(cov_matrix[:, :, len(state_vars) :, len(state_vars) :])
+_, logdet = slogdet(cov_matrix[:, :, len(state_vars) :, len(state_vars) :])
 sigma_inv_delta = np.array(
     [
         [
