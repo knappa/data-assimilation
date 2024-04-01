@@ -682,7 +682,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             3, 2, figsize=(8, 8), sharex=True, sharey=False, layout="constrained"
         )
         for idx, param_name in enumerate(params):
-            row, col = idx % 3, idx // 3
+            row, col = divmod(idx, 3)
             (true_value,) = axs[row, col].plot(
                 [0, TIME_SPAN + 1],
                 [vp_param_values[param_name]] * 2,
@@ -1126,7 +1126,7 @@ if GRAPHS:
     for cycle in range(NUM_CYCLES - 1):
         fig, axs = plt.subplots(3, 2, figsize=(8, 8), sharex=True, layout="constrained")
         for idx, param_name in enumerate(params):
-            row, col = idx % 3, idx // 3
+            row, col = divmod(idx, 3)
 
             (true_value,) = axs[row, col].plot(
                 [0, TIME_SPAN + 1],

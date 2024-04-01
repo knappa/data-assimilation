@@ -14,9 +14,11 @@ orgs = []
 finals = []
 for p_idx, prefix in enumerate(["0.001", "0.005", "0.010", "0.050"]):
     files = [
-        f"./st-g-{prefix}/"+f
+        f"./st-g-{prefix}/" + f
         for f in os.listdir(f"./st-g-{prefix}")
-        if os.path.isfile(f"./st-g-{prefix}/"+f) and f.startswith("st-g-") and f.endswith(prefix + "-data.hdf5")
+        if os.path.isfile(f"./st-g-{prefix}/" + f)
+        and f.startswith("st-g-")
+        and f.endswith(prefix + "-data.hdf5")
     ]
     surp_init = []
     surp_final = []
@@ -53,9 +55,11 @@ orgs = []
 finals = []
 for p_idx, prefix in enumerate(["0.001", "0.005", "0.010", "0.050"]):
     files = [
-        f"./st-s-{prefix}/"+f
+        f"./st-s-{prefix}/" + f
         for f in os.listdir(f"./st-s-{prefix}/")
-        if os.path.isfile(f"./st-s-{prefix}/"+f) and f.startswith("st-s-") and f.endswith(prefix + "-data.hdf5")
+        if os.path.isfile(f"./st-s-{prefix}/" + f)
+        and f.startswith("st-s-")
+        and f.endswith(prefix + "-data.hdf5")
     ]
     surp_init = []
     surp_final = []
@@ -93,9 +97,11 @@ orgs = []
 finals = []
 for p_idx, prefix in enumerate(["0.001", "0.005", "0.010", "0.050"]):
     files = [
-        f"./st-w-{prefix}/"+f
+        f"./st-w-{prefix}/" + f
         for f in os.listdir(f"./st-w-{prefix}/")
-        if os.path.isfile(f"./st-w-{prefix}/"+f) and f.startswith("st-w-") and f.endswith(prefix + "-data.hdf5")
+        if os.path.isfile(f"./st-w-{prefix}/" + f)
+        and f.startswith("st-w-")
+        and f.endswith(prefix + "-data.hdf5")
     ]
     surp_init = []
     surp_final = []
@@ -148,7 +154,7 @@ class AnyObjectHandler(HandlerBase):
         return ls
 
 
-axs[1,1].legend(
+axs[1, 1].legend(
     tuple(zip(finals, orgs)),
     [*map(lambda x: x.get_label(), finals)],
     loc="upper left",
