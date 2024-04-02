@@ -1298,18 +1298,6 @@ surprisal_full = (
     surprisal_full_quadratic_part + logdet + UNIFIED_STATE_SPACE_DIMENSION * np.log(2 * np.pi)
 ) / 2.0
 
-# average of surprisal over all time
-# note: dt = 1 so integral is just mean
-surprisal_average_full = np.mean(surprisal_full, axis=1)
-
-# average of surprisal over all _future_ times
-future_surprisal_average_full = np.array(
-    [
-        np.mean(surprisal_full[cycle, (cycle + 1) * SAMPLE_INTERVAL :])
-        for cycle in range(NUM_CYCLES - 1)
-    ]
-)
-
 #####
 # state surprisal: restrict to just the state vars
 vp_state_trajectory = vp_full_trajectory[:, :3]
@@ -1331,18 +1319,6 @@ surprisal_state_quadratic_part = np.einsum("cij,cij->ci", delta_state, sigma_inv
 surprisal_state = (
     surprisal_state_quadratic_part + logdet + 3 * np.log(2 * np.pi)
 ) / 2.0  # 3 -> 3 state vars
-
-# average of state surprisal over all time
-# note: dt = 1 so integral is just mean
-surprisal_average_state = np.mean(surprisal_state, axis=1)
-
-# average of state surprisal over all _future_ times
-future_surprisal_average_state = np.array(
-    [
-        np.mean(surprisal_state[cycle, (cycle + 1) * SAMPLE_INTERVAL :])
-        for cycle in range(NUM_CYCLES - 1)
-    ]
-)
 
 #####
 # param surprisal: restrict to just the params
