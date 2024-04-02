@@ -1,7 +1,6 @@
-from typing import Tuple
+from typing import Final, Tuple
 
 import numpy as np
-import scipy
 from an_cockrell import AnCockrellModel
 from perlin_noise import PerlinNoise
 
@@ -108,24 +107,12 @@ def model_macro_data(model: AnCockrellModel):
 
 
 def cov_cleanup(cov_mat: np.ndarray) -> np.ndarray:
-    # numerical cleanup: symmetrize and project onto pos def cone
+    # numerical cleanup: symmetrize and ensure pos def
     cov_mat = np.nan_to_num(cov_mat, copy=True)
-    cov_mat = (cov_mat + cov_mat.T) / 2.0
+    cov_mat[:, :] = (cov_mat + cov_mat.T) / 2.0
 
-    eigenvalues, eigenvectors = scipy.linalg.eigh(
-        cov_mat, lower=True, check_finite=False
-    )
-    eigenvalues[:] = np.real(eigenvalues)  # just making sure
-    eigenvectors[:, :] = np.real(eigenvectors)  # just making sure
-    # spectrum must be positive.
-    # from the scipy code, it also can't have a max/min e-val ratio bigger than 1/(1e6*double machine epsilon)
-    # and that's ~4503599627.370496=1/(1e6*np.finfo('d').eps), so a ratio bounded by 1e9 is ok.
-    cov_mat = (
-        eigenvectors
-        @ np.diag(np.minimum(1e5, np.maximum(1e-4, eigenvalues)))
-        @ eigenvectors.T
-    )
-    return np.nan_to_num((cov_mat + cov_mat.T) / 2.0)
+    epsilon: Final[float] = 1e-6
+    return cov_mat - np.minimum(0.0, np.min(np.diag(cov_mat)) - epsilon)
 
 
 ################################################################################
@@ -191,9 +178,9 @@ def gale_shapely_matching(
                         macro_data[model_idx, :] - new_sample[possible_sample_pair, :]
                     )
                     if proposed_pair_dist < established_pair_dist:
-                        model_to_sample_pairing[competitor_model_idx] = (
-                            -1
-                        )  # free the competitor
+                        model_to_sample_pairing[
+                            competitor_model_idx
+                        ] = -1  # free the competitor
                         all_paired = False
                         # make new pair
                         sample_to_model_pairing[possible_sample_pair] = model_idx
