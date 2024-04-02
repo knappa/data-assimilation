@@ -191,9 +191,9 @@ def gale_shapely_matching(
                         macro_data[model_idx, :] - new_sample[possible_sample_pair, :]
                     )
                     if proposed_pair_dist < established_pair_dist:
-                        model_to_sample_pairing[
-                            competitor_model_idx
-                        ] = -1  # free the competitor
+                        model_to_sample_pairing[competitor_model_idx] = (
+                            -1
+                        )  # free the competitor
                         all_paired = False
                         # make new pair
                         sample_to_model_pairing[possible_sample_pair] = model_idx

@@ -274,12 +274,12 @@ for group_num in trange(5, desc="groups"):
             total_IL10[sim_idx, step_idx] = model.total_IL10
             total_IL12[sim_idx, step_idx] = model.total_IL12
             total_IL18[sim_idx, step_idx] = model.total_IL18
-            total_extracellular_virus[
-                sim_idx, step_idx
-            ] = model.total_extracellular_virus
-            total_intracellular_virus[
-                sim_idx, step_idx
-            ] = model.total_intracellular_virus
+            total_extracellular_virus[sim_idx, step_idx] = (
+                model.total_extracellular_virus
+            )
+            total_intracellular_virus[sim_idx, step_idx] = (
+                model.total_intracellular_virus
+            )
             apoptosis_eaten_counter[sim_idx, step_idx] = model.apoptosis_eaten_counter
             infected_epis[sim_idx, step_idx] = np.sum(
                 model.epithelium == EpiType.Infected
