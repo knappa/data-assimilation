@@ -442,7 +442,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 linestyle=":",
                 color="gray",
             )
-            (past_estimate_center_line,) = axs[idx].plot(
+            (past_estimate_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 transform_kf_to_intrinsic(
                     mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx], index=idx
@@ -478,13 +478,13 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]
             )
 
-            (prediction_center_line,) = axs[idx].plot(
+            (prediction_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 transform_kf_to_intrinsic(mu, index=idx),
                 label="prediction",
                 color="blue",
             )
-            prediction_range = axs[idx].fill_between(
+            prediction_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 transform_kf_to_intrinsic(mu - sigma, index=idx),
                 # np.minimum(
@@ -497,7 +497,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 color="blue",
                 alpha=0.35,
             )
-            axs[idx].set_title(state_var_name, loc="left")
+            axs[row, col].set_title(state_var_name, loc="left")
         # remove axes on unused graphs
         for idx in range(
             len(state_vars),
@@ -746,7 +746,7 @@ if GRAPHS:
                 color="black",
             )
 
-            (past_est_center_line,) = axs[idx].plot(
+            (past_est_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 transform_kf_to_intrinsic(
                     mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx], index=idx
@@ -1089,7 +1089,7 @@ sigma_inv_delta = np.array(
             )[0]
             for t_idx in range(cov_matrix.shape[1])
         ]
-        for cycle in range(NUM_CYCLES)
+        for cycle in range(NUM_CYCLES + 1)
     ]
 )
 surprisal_quadratic_part = np.einsum("cij,cij->ci", delta_full, sigma_inv_delta)
@@ -1098,18 +1098,6 @@ surprisal_full = (
     + logdet
     + UNIFIED_STATE_SPACE_DIMENSION * np.log(2 * np.pi)
 ) / 2.0
-
-# average of surprisal over all time
-# note: dt = 1 so integral is just mean
-surprisal_average_full = np.mean(surprisal_full, axis=1)
-
-# average of surprisal over all _future_ times
-future_surprisal_average_full = np.array(
-    [
-        np.mean(surprisal_full[cycle, (cycle + 1) * SAMPLE_INTERVAL :])
-        for cycle in range(NUM_CYCLES - 1)
-    ]
-)
 
 #####
 # state surprisal: restrict to just the state vars
@@ -1124,25 +1112,13 @@ sigma_inv_delta = np.array(
             )[0]
             for t_idx in range(cov_matrix.shape[1])
         ]
-        for cycle in range(NUM_CYCLES)
+        for cycle in range(NUM_CYCLES + 1)
     ]
 )
 surprisal_quadratic_part = np.einsum("cij,cij->ci", delta_state, sigma_inv_delta)
 surprisal_state = (
     surprisal_quadratic_part + logdet + len(state_vars) * np.log(2 * np.pi)
 ) / 2.0
-
-# average of state surprisal over all time
-# note: dt = 1 so integral is just mean
-surprisal_average_state = np.mean(surprisal_state, axis=1)
-
-# average of state surprisal over all _future_ times
-future_surprisal_average_state = np.array(
-    [
-        np.mean(surprisal_state[cycle, (cycle + 1) * SAMPLE_INTERVAL :])
-        for cycle in range(NUM_CYCLES - 1)
-    ]
-)
 
 #####
 # param surprisal: restrict to just the params
@@ -1159,25 +1135,13 @@ sigma_inv_delta = np.array(
             )[0]
             for t_idx in range(cov_matrix.shape[1])
         ]
-        for cycle in range(NUM_CYCLES)
+        for cycle in range(NUM_CYCLES + 1)
     ]
 )
 surprisal_quadratic_part = np.einsum("cij,cij->ci", delta_param, sigma_inv_delta)
 surprisal_param = (
     surprisal_quadratic_part + logdet + len(variational_params) * np.log(2 * np.pi)
 ) / 2.0
-
-# average of state surprisal over all time
-# note: dt = 1 so integral is just mean
-surprisal_average_param = np.mean(surprisal_param, axis=1)
-
-# average of state surprisal over all _future_ times
-future_surprisal_average_param = np.array(
-    [
-        np.mean(surprisal_param[cycle, (cycle + 1) * SAMPLE_INTERVAL :])
-        for cycle in range(NUM_CYCLES - 1)
-    ]
-)
 
 ################################################################################
 
