@@ -99,6 +99,14 @@ else:
         "--verbose", help="print extra diagnostic messages", action="store_true"
     )
 
+    parser.add_argument(
+        "--predict",
+        type=str,
+        choices=["to-kf-update", "to-next-kf-update", "to-end"],
+        help="how far to extend predictions",
+        required=True,
+    )
+
     parser.add_argument("--grid_width", help="width of simulation grid", type=int)
     parser.add_argument("--grid_height", help="height of simulation grid", type=int)
 
@@ -113,7 +121,6 @@ if hasattr(args, "grid_width"):
 
 if hasattr(args, "grid_height"):
     default_params["GRID_HEIGHT"] = args.grid_height
-
 
 VERBOSE: Final[bool] = False if not hasattr(args, "verbose") else args.verbose
 
@@ -175,6 +182,8 @@ FILE_PREFIX: Final[str] = (
 
 GRAPHS: Final[bool] = True if not hasattr(args, "graphs") else bool(args.graphs)
 
+PREDICT: Final[str] = "to-kf-update" if not hasattr(args, "predict") else args.predict
+
 ################################################################################
 # constants
 
@@ -212,7 +221,6 @@ variational_params_graphs_figsize: Final[Tuple[float, float]] = (
     1.8 * variational_params_graphs_rows,
     1.8 * variational_params_graphs_cols,
 )
-
 
 ################################################################################
 # statistical parameters
@@ -359,7 +367,6 @@ lw.fit(macro_data)
 mean_vec[:, time, :] = lw.location_
 cov_matrix[:, time, :, :] = lw.covariance_
 
-
 for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     # advance ensemble of models
     for _ in tqdm(range(SAMPLE_INTERVAL), desc="time steps to prediction"):
@@ -396,43 +403,49 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
         mean_vec[cycle:, time, :] = lw.location_
         cov_matrix[cycle:, time, :, :] = lw.covariance_
 
-    # make copy of the models and advance them to the end of the simulation time
-    model_ensemble_copy = deepcopy(model_ensemble)
-    for future_time in tqdm(
-        range(time, min(time + SAMPLE_INTERVAL + 1, TIME_SPAN + 1)),
-        desc="time steps past",
-    ):
-        for model in model_ensemble_copy:
-            model.time_step()
-            if PARAMETER_RANDOM_WALK:
-                macrostate = transform_intrinsic_to_kf(model_macro_data(model))
-                random_walk_macrostate = np.abs(
-                    macrostate
-                    + multivariate_normal(
-                        mean=np.zeros_like(macrostate),
-                        cov=np.diag(0.01 * np.ones_like(macrostate)),
-                    ).rvs()
-                )
-                modify_model(
-                    model,
-                    transform_kf_to_intrinsic(random_walk_macrostate),
-                    ignore_state_vars=True,
-                    verbose=VERBOSE,
-                    state_var_indices=state_var_indices,
-                    state_vars=state_vars,
-                    variational_params=variational_params,
-                )
-        macro_data = np.array(
-            [
-                transform_intrinsic_to_kf(model_macro_data(model))
-                for model in model_ensemble_copy
-            ]
-        )
-        # mean_vec[cycle:, future_time, :] = np.mean(macro_data, axis=0)
-        # cov_matrix[cycle:, future_time, :, :] = np.cov(macro_data, rowvar=False)
-        lw.fit(macro_data)
-        mean_vec[cycle:, future_time, :] = lw.location_
-        cov_matrix[cycle:, future_time, :, :] = lw.covariance_
+    if PREDICT != "to-kf-update":
+        # make copy of the models and advance them to the end of the simulation time
+        model_ensemble_copy = deepcopy(model_ensemble)
+        if PREDICT == "to-next-kf-update":
+            final_time = time + SAMPLE_INTERVAL + 1
+        else:
+            # PREDICT == "to-end"
+            final_time = TIME_SPAN + 1
+        for future_time in tqdm(
+            range(time, min(TIME_SPAN + 1, final_time)),
+            desc="time steps past kf-update",
+        ):
+            for model in model_ensemble_copy:
+                model.time_step()
+                if PARAMETER_RANDOM_WALK:
+                    macrostate = transform_intrinsic_to_kf(model_macro_data(model))
+                    random_walk_macrostate = np.abs(
+                        macrostate
+                        + multivariate_normal(
+                            mean=np.zeros_like(macrostate),
+                            cov=np.diag(0.01 * np.ones_like(macrostate)),
+                        ).rvs()
+                    )
+                    modify_model(
+                        model,
+                        transform_kf_to_intrinsic(random_walk_macrostate),
+                        ignore_state_vars=True,
+                        verbose=VERBOSE,
+                        state_var_indices=state_var_indices,
+                        state_vars=state_vars,
+                        variational_params=variational_params,
+                    )
+            macro_data = np.array(
+                [
+                    transform_intrinsic_to_kf(model_macro_data(model))
+                    for model in model_ensemble_copy
+                ]
+            )
+            # mean_vec[cycle:, future_time, :] = np.mean(macro_data, axis=0)
+            # cov_matrix[cycle:, future_time, :, :] = np.cov(macro_data, rowvar=False)
+            lw.fit(macro_data)
+            mean_vec[cycle:, future_time, :] = lw.location_
+            cov_matrix[cycle:, future_time, :, :] = lw.covariance_
 
     ################################################################################
     # plot projection of state variables
@@ -465,12 +478,15 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             )
             past_estimate_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL),
-                transform_kf_to_intrinsic(
-                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
-                    - np.sqrt(
-                        cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]
+                np.maximum(
+                    0.0,
+                    transform_kf_to_intrinsic(
+                        mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
+                        - np.sqrt(
+                            cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]
+                        ),
+                        index=idx,
                     ),
-                    index=idx,
                 ),
                 # np.minimum(
                 #     10 * max_scales[state_var_name],
@@ -499,14 +515,11 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             )
             prediction_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                transform_kf_to_intrinsic(mu - sigma, index=idx),
-                # np.minimum(
-                #     10 * max_scales[state_var_name],
+                np.maximum(0.0, transform_kf_to_intrinsic(mu - sigma, index=idx)),
                 transform_kf_to_intrinsic(
                     mu + sigma,
                     index=idx,
                 ),
-                # ),
                 color="blue",
                 alpha=0.35,
             )
@@ -576,19 +589,22 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
 
             past_estimate_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL),
-                transform_kf_to_intrinsic(
-                    mean_vec[
-                        cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
-                    ]
-                    - np.sqrt(
-                        cov_matrix[
-                            cycle,
-                            : (cycle + 1) * SAMPLE_INTERVAL,
-                            len_state_vars + idx,
-                            len_state_vars + idx,
+                np.maximum(
+                    0.0,
+                    transform_kf_to_intrinsic(
+                        mean_vec[
+                            cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
                         ]
+                        - np.sqrt(
+                            cov_matrix[
+                                cycle,
+                                : (cycle + 1) * SAMPLE_INTERVAL,
+                                len_state_vars + idx,
+                                len_state_vars + idx,
+                            ]
+                        ),
+                        index=len_state_vars + idx,
                     ),
-                    index=len_state_vars + idx,
                 ),
                 transform_kf_to_intrinsic(
                     mean_vec[
@@ -623,19 +639,22 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
 
             prediction_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                transform_kf_to_intrinsic(
-                    mean_vec[
-                        cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
-                    ]
-                    - np.sqrt(
-                        cov_matrix[
-                            cycle,
-                            (cycle + 1) * SAMPLE_INTERVAL :,
-                            len_state_vars + idx,
-                            len_state_vars + idx,
+                np.maximum(
+                    0.0,
+                    transform_kf_to_intrinsic(
+                        mean_vec[
+                            cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
                         ]
+                        - np.sqrt(
+                            cov_matrix[
+                                cycle,
+                                (cycle + 1) * SAMPLE_INTERVAL :,
+                                len_state_vars + idx,
+                                len_state_vars + idx,
+                            ]
+                        ),
+                        index=len_state_vars + idx,
                     ),
-                    index=len_state_vars + idx,
                 ),
                 transform_kf_to_intrinsic(
                     mean_vec[
@@ -694,7 +713,10 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
 
     observation = np.array(
         [
-            transform_intrinsic_to_kf(vp_trajectory[time, state_var_indices[obs_name]])
+            transform_intrinsic_to_kf(
+                vp_trajectory[time, state_var_indices[obs_name]],
+                index=state_var_indices[obs_name],
+            )
             for obs_name in OBSERVABLE_VAR_NAMES
         ],
         dtype=np.float64,
