@@ -290,7 +290,7 @@ if GRAPHS:
             loc="center",
             wrap=True,
         )
-        axs[row, col].ylim(bottom=max(0.0, axs[row, col].ylim()[0]))
+        axs[row, col].set_ylim(bottom=max(0.0, axs[row, col].get_ylim()[0]))
     for idx in range(len(state_vars), state_var_graphs_rows * state_var_graphs_cols):
         row, col = divmod(idx, state_var_graphs_cols)
         axs[row, col].set_axis_off()
@@ -525,7 +525,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 alpha=0.35,
             )
             axs[row, col].set_title(fix_title(state_var_name), loc="left", wrap=True)
-            axs[row, col].ylim(bottom=max(0.0, axs[row, col].ylim()[0]))
+            axs[row, col].set_ylim(bottom=max(0.0, axs[row, col].get_ylim()[0]))
         # remove axes on unused graphs
         for idx in range(
             len(state_vars),
@@ -684,7 +684,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 alpha=0.35,
             )
             axs[row, col].set_title(fix_title(param_name), loc="center", wrap=True)
-            axs[row, col].ylim(bottom=max(0.0, axs[row, col].ylim()[0]))
+            axs[row, col].set_ylim(bottom=max(0.0, axs[row, col].get_ylim()[0]))
 
         # remove axes on unused graphs
         for idx in range(
@@ -904,7 +904,7 @@ if GRAPHS:
                 alpha=0.35,
             )
             axs[row, col].set_title(fix_title(state_var_name), loc="left", wrap=True)
-            axs[row, col].ylim(bottom=max(0.0, axs[row, col].ylim()[0]))
+            axs[row, col].set_ylim(bottom=max(0.0, axs[row, col].get_ylim()[0]))
         # remove axes on unused graphs
         for idx in range(
             len(state_vars),
@@ -1116,7 +1116,7 @@ if GRAPHS:
                 label="new future cone of uncertainty",
             )
             axs[row, col].set_title(fix_title(param_name), loc="center", wrap=True)
-            axs[row, col].ylim(bottom=max(0.0, axs[row, col].ylim()[0]))
+            axs[row, col].set_ylim(bottom=max(0.0, axs[row, col].get_ylim()[0]))
 
         # remove axes on unused graphs
         for idx in range(
