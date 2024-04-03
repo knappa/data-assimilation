@@ -290,6 +290,7 @@ if GRAPHS:
             loc="center",
             wrap=True,
         )
+        axs[row, col].ylim(bottom=max(0.0, axs[row, col].ylim()[0]))
     for idx in range(len(state_vars), state_var_graphs_rows * state_var_graphs_cols):
         row, col = divmod(idx, state_var_graphs_cols)
         axs[row, col].set_axis_off()
@@ -524,6 +525,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 alpha=0.35,
             )
             axs[row, col].set_title(fix_title(state_var_name), loc="left", wrap=True)
+            axs[row, col].ylim(bottom=max(0.0, axs[row, col].ylim()[0]))
         # remove axes on unused graphs
         for idx in range(
             len(state_vars),
@@ -532,8 +534,16 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             row, col = divmod(idx, state_var_graphs_cols)
             axs[row, col].set_axis_off()
 
+        # place legend
+        if len(state_vars) < state_var_graphs_rows * state_var_graphs_cols:
+            legend_placement = axs[state_var_graphs_rows - 1, state_var_graphs_cols - 1]
+            legend_loc = "upper left"
+        else:
+            legend_placement = fig
+            legend_loc = "outside"
+
         # noinspection PyUnboundLocalVariable
-        fig.legend(
+        legend_placement.legend(
             [
                 true_value,
                 (past_estimate_center_line, past_estimate_range),
@@ -544,7 +554,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 past_estimate_center_line.get_label(),
                 prediction_center_line.get_label(),
             ],
-            # loc="outside upper right",
+            loc=legend_loc,
         )
         fig.suptitle("State Prediction")
         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-state.pdf")
@@ -674,6 +684,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 alpha=0.35,
             )
             axs[row, col].set_title(fix_title(param_name), loc="center", wrap=True)
+            axs[row, col].ylim(bottom=max(0.0, axs[row, col].ylim()[0]))
 
         # remove axes on unused graphs
         for idx in range(
@@ -683,7 +694,20 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             row, col = divmod(idx, variational_params_graphs_cols)
             axs[row, col].set_axis_off()
 
-        fig.legend(
+        # place legend
+        if (
+            len(state_vars)
+            < variational_params_graphs_rows * variational_params_graphs_cols
+        ):
+            legend_placement = axs[
+                variational_params_graphs_rows - 1, variational_params_graphs_cols - 1
+            ]
+            legend_loc = "upper left"
+        else:
+            legend_placement = fig
+            legend_loc = "outside"
+
+        legend_placement.legend(
             [
                 true_value,
                 (past_estimate_center_line, past_estimate_range),
@@ -694,7 +718,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 past_estimate_center_line.get_label(),
                 prediction_center_line.get_label(),
             ],
-            loc="outside lower right",
+            loc=legend_loc,
         )
         fig.suptitle("Parameter Projection")
         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-params.pdf")
@@ -880,6 +904,7 @@ if GRAPHS:
                 alpha=0.35,
             )
             axs[row, col].set_title(fix_title(state_var_name), loc="left", wrap=True)
+            axs[row, col].ylim(bottom=max(0.0, axs[row, col].ylim()[0]))
         # remove axes on unused graphs
         for idx in range(
             len(state_vars),
@@ -888,8 +913,16 @@ if GRAPHS:
             row, col = divmod(idx, state_var_graphs_cols)
             axs[row, col].set_axis_off()
 
+        # place legend
+        if len(state_vars) < state_var_graphs_rows * state_var_graphs_cols:
+            legend_placement = axs[state_var_graphs_rows - 1, state_var_graphs_cols - 1]
+            legend_loc = "upper left"
+        else:
+            legend_placement = fig
+            legend_loc = "outside"
+
         # noinspection PyUnboundLocalVariable
-        fig.legend(
+        legend_placement.legend(
             [
                 true_value,
                 (past_est_center_line, past_est_range),
@@ -902,7 +935,7 @@ if GRAPHS:
                 future_est_before_update_center_line.get_label(),
                 future_est_after_update_center_line.get_label(),
             ],
-            loc="outside lower center",
+            loc=legend_loc,
         )
         fig.suptitle("State Projection", ha="left")
         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-state-kfupd.pdf")
@@ -1083,6 +1116,7 @@ if GRAPHS:
                 label="new future cone of uncertainty",
             )
             axs[row, col].set_title(fix_title(param_name), loc="center", wrap=True)
+            axs[row, col].ylim(bottom=max(0.0, axs[row, col].ylim()[0]))
 
         # remove axes on unused graphs
         for idx in range(
@@ -1092,7 +1126,20 @@ if GRAPHS:
             row, col = divmod(idx, variational_params_graphs_cols)
             axs[row, col].set_axis_off()
 
-        fig.legend(
+        # place the legend
+        if (
+            len(variational_params)
+            < variational_params_graphs_rows * variational_params_graphs_cols
+        ):
+            legend_placement = axs[
+                variational_params_graphs_rows - 1, variational_params_graphs_cols - 1
+            ]
+            legend_loc = "upper left"
+        else:
+            legend_placement = fig
+            legend_loc = "outside"
+
+        legend_placement.legend(
             [
                 true_value,
                 (past_est_center_line, past_est_range),
@@ -1105,7 +1152,7 @@ if GRAPHS:
                 future_est_before_update_center_line.get_label(),
                 future_est_after_update_center_line.get_label(),
             ],
-            loc="lower right",
+            loc=legend_loc,
         )
         fig.suptitle("Parameter Projection", x=0, ha="left")
         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-params-kfupd.pdf")
