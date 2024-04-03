@@ -155,6 +155,53 @@ import numpy as np
 
 # TODO WARNING: temporarily set to identity function
 
+scale_vec = np.array(
+    [
+        1000,
+        200_000,
+        5000,
+        2500,
+        500,
+        2500,
+        2500,
+        2000,
+        2500,
+        10_000,
+        10_000,
+        2000,
+        1000,
+        2000,
+        2000,
+        1000,
+        100,
+        1000,
+        50,
+        26,
+        1000,
+        55,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+    ],
+    dtype=np.float64,
+)
+
 
 def transform_intrinsic_to_kf(
     macrostate_intrinsic: np.ndarray, *, index=-1
@@ -168,11 +215,11 @@ def transform_intrinsic_to_kf(
     """
     if index == -1:
         # full state
-        retval = macrostate_intrinsic.copy()
+        retval = macrostate_intrinsic / scale_vec
         return retval
     else:
         # parameters
-        return macrostate_intrinsic
+        return macrostate_intrinsic / scale_vec[index]
 
 
 def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, index=-1) -> np.ndarray:
@@ -185,8 +232,8 @@ def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, index=-1) -> np.ndar
     """
     if index == -1:
         # full state
-        retval = macrostate_kf.copy()
+        retval = macrostate_kf * scale_vec
         return retval
     else:
         # parameters
-        return macrostate_kf
+        return macrostate_kf * scale_vec[index]
