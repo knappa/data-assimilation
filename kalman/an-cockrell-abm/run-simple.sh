@@ -17,4 +17,5 @@
   --grid_width 51 \
   --grid_height 51 \
   --prefix simple \
+  --predict to-next-kf-update \
   # --verbose
