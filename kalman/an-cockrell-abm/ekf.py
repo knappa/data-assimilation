@@ -749,7 +749,9 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     for model_idx in tqdm(range(ENSEMBLE_SIZE), desc="model modifications"):
         modify_model(
             model_ensemble[model_idx],
-            new_sample[model_to_sample_pairing[model_idx], :],
+            transform_kf_to_intrinsic(
+                new_sample[model_to_sample_pairing[model_idx], :]
+            ),
             verbose=VERBOSE,
             state_var_indices=state_var_indices,
             state_vars=state_vars,
