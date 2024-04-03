@@ -57,7 +57,7 @@ for (( run=START_NUM; run < END_NUM; run++ )); do
   --grid_width 51 \
   --grid_height 51 \
   --prefix $PREFIX \
-  --predict to-end \
+  --predict to-kf-update \
   # --graphs \
   # --verbose
 
