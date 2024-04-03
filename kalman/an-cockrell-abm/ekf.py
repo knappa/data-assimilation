@@ -523,7 +523,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 color="blue",
                 alpha=0.35,
             )
-            axs[row, col].set_title(state_var_name, loc="left")
+            axs[row, col].set_title(fix_title(state_var_name), loc="left", wrap=True)
         # remove axes on unused graphs
         for idx in range(
             len(state_vars),
@@ -673,7 +673,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 color="blue",
                 alpha=0.35,
             )
-            axs[row, col].set_title(param_name)
+            axs[row, col].set_title(fix_title(param_name), loc="center", wrap=True)
 
         # remove axes on unused graphs
         for idx in range(
@@ -879,7 +879,7 @@ if GRAPHS:
                 color="blue",
                 alpha=0.35,
             )
-            axs[row, col].set_title(state_var_name, loc="left")
+            axs[row, col].set_title(fix_title(state_var_name), loc="left", wrap=True)
         # remove axes on unused graphs
         for idx in range(
             len(state_vars),
@@ -1082,7 +1082,7 @@ if GRAPHS:
                 alpha=0.35,
                 label="new future cone of uncertainty",
             )
-            axs[row, col].set_title(param_name)
+            axs[row, col].set_title(fix_title(param_name), loc="center", wrap=True)
 
         # remove axes on unused graphs
         for idx in range(
