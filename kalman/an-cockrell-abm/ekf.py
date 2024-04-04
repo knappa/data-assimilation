@@ -540,7 +540,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             legend_loc = "upper left"
         else:
             legend_placement = fig
-            legend_loc = "outside"
+            legend_loc = "outside lower center"
 
         # noinspection PyUnboundLocalVariable
         legend_placement.legend(
@@ -705,7 +705,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             legend_loc = "upper left"
         else:
             legend_placement = fig
-            legend_loc = "outside"
+            legend_loc = "outside lower center"
 
         legend_placement.legend(
             [
@@ -919,7 +919,7 @@ if GRAPHS:
             legend_loc = "upper left"
         else:
             legend_placement = fig
-            legend_loc = "outside"
+            legend_loc = "outside lower center"
 
         # noinspection PyUnboundLocalVariable
         legend_placement.legend(
@@ -1137,7 +1137,7 @@ if GRAPHS:
             legend_loc = "upper left"
         else:
             legend_placement = fig
-            legend_loc = "outside"
+            legend_loc = "outside lower center"
 
         legend_placement.legend(
             [
@@ -1169,7 +1169,7 @@ sigma_inv_delta = np.array(
     [
         [
             np.linalg.lstsq(
-                cov_matrix[cycle, t_idx, :, :], delta_full[cycle, t_idx, :]
+                cov_matrix[cycle, t_idx, :, :], delta_full[cycle, t_idx, :], rcond=None
             )[0]
             for t_idx in range(cov_matrix.shape[1])
         ]
@@ -1192,7 +1192,7 @@ sigma_inv_delta = np.array(
         [
             np.linalg.lstsq(
                 cov_matrix[cycle, t_idx, : len(state_vars), : len(state_vars)],
-                delta_state[cycle, t_idx, :],
+                delta_state[cycle, t_idx, :], rcond=None
             )[0]
             for t_idx in range(cov_matrix.shape[1])
         ]
@@ -1215,7 +1215,7 @@ sigma_inv_delta = np.array(
         [
             np.linalg.lstsq(
                 cov_matrix[cycle, t_idx, len(state_vars) :, len(state_vars) :],
-                delta_param[cycle, t_idx, :],
+                delta_param[cycle, t_idx, :], rcond=None
             )[0]
             for t_idx in range(cov_matrix.shape[1])
         ]
