@@ -144,10 +144,12 @@ axs[0, 0].title.set_text("Measuring Grass")
 axs[1, 1].axes.set_axis_off()
 
 
+# noinspection PyTypeChecker
 class AnyObjectHandler(HandlerBase):
     def create_artists(self, legend, orig_handle, x0, y0, width, height, fontsize, trans):
         size = len(orig_handle)
         ls = []
+        # noinspection PyShadowingNames
         for idx, handle in enumerate(orig_handle):
             h = (size - idx) / (size + 1) * height
             ls.append(
@@ -428,10 +430,6 @@ with h5py.File(normal_surp_files[-1], "r") as h5file:
             label="prediction cone",
         )
 
-        # ymin = max(0.0,axs_params[idx].get_ylim()[0])
-        # ymax = min(axs_params[idx].get_ylim()[1], 1.2*np.max(h5file["virtual_patient_trajectory"][:, 3 + idx]))
-        # axs_params[idx].set_ylim(bottom=ymin, top=ymax)
-
     # noinspection PyUnboundLocalVariable
     fig.legend(
         [
@@ -571,10 +569,6 @@ with h5py.File(normal_surp_files[0], "r") as h5file:
             alpha=0.35,
             label="prediction cone",
         )
-
-        # ymin = max(0.0,axs_params[idx].get_ylim()[0])
-        # ymax = min(axs_params[idx].get_ylim()[1], 1.2*np.max(h5file["virtual_patient_trajectory"][:, 3 + idx]))
-        # axs_params[idx].set_ylim(bottom=ymin, top=ymax)
 
     # noinspection PyUnboundLocalVariable
     fig.legend(
@@ -716,10 +710,6 @@ with h5py.File(normal_surp_files[-1], "r") as h5file:
             label="prediction cone",
         )
 
-        # ymin = max(0.0,axs_params[idx].get_ylim()[0])
-        # ymax = min(axs_params[idx].get_ylim()[1], 1.2*np.max(h5file["virtual_patient_trajectory"][:, 3 + idx]))
-        # axs_params[idx].set_ylim(bottom=ymin, top=ymax)
-
     # noinspection PyUnboundLocalVariable
     fig.legend(
         [
@@ -754,8 +744,3 @@ for p_idx, prefix in enumerate(["00.01"]):
         with h5py.File(file, "r") as h5file:
             if np.all(h5file["surprisal_full"][-1, :] <= 20):
                 low_surp_files.append(file)
-
-#
-# def sing_val_projs(M, idx):
-#     evals, evecs = np.linalg.eigh(M)
-#     return np.abs(evecs[:,idx,:] * evals)
