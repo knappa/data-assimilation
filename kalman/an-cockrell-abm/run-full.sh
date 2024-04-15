@@ -18,4 +18,6 @@
   --grid_height 51 \
   --prefix full \
   --predict to-next-kf-update \
+  --time_span 2016 \
+  --sample_interval 48 \
   # --verbose

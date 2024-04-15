@@ -17,5 +17,7 @@
   --grid_width 51 \
   --grid_height 51 \
   --prefix spatial \
-  --predict to-next-kf-update \
+  --predict to-kf-update \
+  --time_span 2016 \
+  --sample_interval 48 \
   # --verbose

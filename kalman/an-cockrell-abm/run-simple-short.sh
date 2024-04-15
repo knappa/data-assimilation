@@ -17,7 +17,7 @@
   --grid_width 51 \
   --grid_height 51 \
   --prefix simple \
-  --predict to-next-kf-update \
-  --time_span 2016 \
-  --sample_interval 48 \
+  --predict to-kf-update \
+  --time_span 96 \
+  --sample_interval 24 \
   # --verbose

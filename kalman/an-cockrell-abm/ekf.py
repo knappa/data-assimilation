@@ -104,6 +104,19 @@ else:
     parser.add_argument("--grid_width", help="width of simulation grid", type=int)
     parser.add_argument("--grid_height", help="height of simulation grid", type=int)
 
+    parser.add_argument(
+        "--time_span",
+        help="number of abm iterations in a full run",
+        type=int,
+        default=2016,
+    )
+    parser.add_argument(
+        "--sample_interval",
+        help="iterations in the interval between samples",
+        type=int,
+        default=48,
+    )
+
     args = parser.parse_args()
 
 ################################################################################
@@ -178,6 +191,15 @@ GRAPHS: Final[bool] = True if not hasattr(args, "graphs") else bool(args.graphs)
 
 PREDICT: Final[str] = "to-kf-update" if not hasattr(args, "predict") else args.predict
 
+TIME_SPAN: Final[int] = (
+    2016 if not hasattr(args, "time_span") or args.time_span <= 0 else args.time_span
+)
+SAMPLE_INTERVAL: Final[int] = (
+    48
+    if not hasattr(args, "sample_interval") or args.sample_interval <= 0
+    else args.sample_interval
+)
+
 ################################################################################
 # constants
 
@@ -185,8 +207,6 @@ PREDICT: Final[str] = "to-kf-update" if not hasattr(args, "predict") else args.p
 # with covariance starvation)
 PARAMETER_RANDOM_WALK: Final[bool] = True
 
-TIME_SPAN: Final[int] = 2016
-SAMPLE_INTERVAL: Final[int] = 48  # how often to make measurements
 NUM_CYCLES: Final[int] = TIME_SPAN // SAMPLE_INTERVAL
 
 ################################################################################
