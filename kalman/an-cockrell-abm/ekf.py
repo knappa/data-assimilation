@@ -335,17 +335,16 @@ def model_ensemble_from(means, covariances):
 model_ensemble = model_ensemble_from(init_mean_vec, init_cov_matrix)
 
 # mean and covariances through time
-mean_vec = np.full(
-    (NUM_CYCLES + 1, TIME_SPAN + 1, UNIFIED_STATE_SPACE_DIMENSION), -1, dtype=np.float64
+mean_vec = np.zeros(
+    (NUM_CYCLES + 1, TIME_SPAN + 1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64
 )
-cov_matrix = np.full(
+cov_matrix = np.zeros(
     (
         NUM_CYCLES + 1,
         TIME_SPAN + 1,
         UNIFIED_STATE_SPACE_DIMENSION,
         UNIFIED_STATE_SPACE_DIMENSION,
     ),
-    -1,
     dtype=np.float64,
 )
 
