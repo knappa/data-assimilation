@@ -1185,14 +1185,18 @@ surprisal_full = (
 
 #####
 # state surprisal: restrict to just the state vars
-delta_state = mean_vec[:, :, : len(state_vars)] - vp_trajectory[:, : len(state_vars)]
+delta_state = (
+    mean_vec[:, :, : len(state_vars)]
+    - transform_intrinsic_to_kf(vp_trajectory)[:, : len(state_vars)]
+)
 _, logdet = slogdet(cov_matrix[:, :, : len(state_vars), : len(state_vars)])
 sigma_inv_delta = np.array(
     [
         [
             np.linalg.lstsq(
                 cov_matrix[cycle, t_idx, : len(state_vars), : len(state_vars)],
-                delta_state[cycle, t_idx, :], rcond=None
+                delta_state[cycle, t_idx, :],
+                rcond=None,
             )[0]
             for t_idx in range(cov_matrix.shape[1])
         ]
@@ -1206,7 +1210,7 @@ surprisal_state = (
 
 #####
 # param surprisal: restrict to just the params
-vp_param_trajectory = vp_trajectory[:, len(state_vars) :]
+vp_param_trajectory = transform_intrinsic_to_kf(vp_trajectory)[:, len(state_vars) :]
 
 delta_param = mean_vec[:, :, len(state_vars) :] - vp_param_trajectory
 _, logdet = slogdet(cov_matrix[:, :, len(state_vars) :, len(state_vars) :])
@@ -1215,7 +1219,8 @@ sigma_inv_delta = np.array(
         [
             np.linalg.lstsq(
                 cov_matrix[cycle, t_idx, len(state_vars) :, len(state_vars) :],
-                delta_param[cycle, t_idx, :], rcond=None
+                delta_param[cycle, t_idx, :],
+                rcond=None,
             )[0]
             for t_idx in range(cov_matrix.shape[1])
         ]
