@@ -153,54 +153,10 @@ import numpy as np
 # 39    "inflammasome_il1_secretion"
 # 40    "inflammasome_macro_pre_il1_secretion"
 
-# TODO WARNING: temporarily set to identity function
 
-scale_vec = np.array(
-    [
-        1000,
-        200_000,
-        5000,
-        2500,
-        500,
-        2500,
-        2500,
-        2000,
-        2500,
-        10_000,
-        10_000,
-        2000,
-        1000,
-        2000,
-        2000,
-        1000,
-        100,
-        1000,
-        50,
-        26,
-        1000,
-        55,
-        10,
-        5,
-        1,
-        50,
-        50,
-        400,
-        2,
-        10,
-        2,
-        1,
-        1,
-        5,
-        50,
-        10,
-        2,
-        5,
-        2,
-        2,
-        5,
-    ],
-    dtype=np.float64,
-)
+# use a slight shift on the log-transform as variables can be exactly zero
+# and arithmetic using -inf=np.log(0.0) gives poor results.
+__EPSILON__ = 1e-3
 
 
 def transform_intrinsic_to_kf(
@@ -215,11 +171,11 @@ def transform_intrinsic_to_kf(
     """
     if index == -1:
         # full state
-        retval = macrostate_intrinsic / scale_vec
+        retval = np.log(__EPSILON__ + macrostate_intrinsic)
         return retval
     else:
         # parameters
-        return macrostate_intrinsic / scale_vec[index]
+        return np.log(__EPSILON__ + macrostate_intrinsic)
 
 
 def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, index=-1) -> np.ndarray:
@@ -232,8 +188,8 @@ def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, index=-1) -> np.ndar
     """
     if index == -1:
         # full state
-        retval = macrostate_kf * scale_vec
+        retval = np.maximum(0.0, np.exp(macrostate_kf) - __EPSILON__)
         return retval
     else:
         # parameters
-        return macrostate_kf * scale_vec[index]
+        return np.maximum(0.0, np.exp(macrostate_kf) - __EPSILON__)

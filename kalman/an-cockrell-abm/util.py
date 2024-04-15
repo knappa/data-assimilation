@@ -2,9 +2,32 @@ from typing import Final, Tuple
 
 import numpy as np
 from an_cockrell import AnCockrellModel
+from matplotlib import colors
 from perlin_noise import PerlinNoise
 
 from consts import UNIFIED_STATE_SPACE_DIMENSION, state_vars, variational_params
+
+################################################################################
+
+
+def clr_hex(*args) -> str:
+    return "#" + "".join(map(lambda n: hex(n)[2:].zfill(2), args))
+
+
+cmap = colors.ListedColormap(
+    [
+        clr_hex(0, 0, 0),
+        clr_hex(230, 159, 0),
+        clr_hex(86, 180, 233),
+        clr_hex(0, 158, 115),
+        clr_hex(240, 228, 66),
+        clr_hex(0, 114, 178),
+        clr_hex(213, 94, 0),
+        clr_hex(204, 121, 167),
+    ]
+)
+
+################################################################################
 
 
 def compute_desired_epi_counts(
@@ -178,9 +201,9 @@ def gale_shapely_matching(
                         macro_data[model_idx, :] - new_sample[possible_sample_pair, :]
                     )
                     if proposed_pair_dist < established_pair_dist:
-                        model_to_sample_pairing[
-                            competitor_model_idx
-                        ] = -1  # free the competitor
+                        model_to_sample_pairing[competitor_model_idx] = (
+                            -1
+                        )  # free the competitor
                         all_paired = False
                         # make new pair
                         sample_to_model_pairing[possible_sample_pair] = model_idx

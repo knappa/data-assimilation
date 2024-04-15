@@ -22,13 +22,7 @@ from consts import (
     variational_params,
 )
 from transform import transform_intrinsic_to_kf, transform_kf_to_intrinsic
-from util import (
-    cov_cleanup,
-    fix_title,
-    gale_shapely_matching,
-    model_macro_data,
-    slogdet,
-)
+from util import fix_title, gale_shapely_matching, model_macro_data, slogdet
 
 ################################################################################
 
@@ -341,17 +335,16 @@ def model_ensemble_from(means, covariances):
 model_ensemble = model_ensemble_from(init_mean_vec, init_cov_matrix)
 
 # mean and covariances through time
-mean_vec = np.full(
-    (NUM_CYCLES + 1, TIME_SPAN + 1, UNIFIED_STATE_SPACE_DIMENSION), -1, dtype=np.float64
+mean_vec = np.zeros(
+    (NUM_CYCLES + 1, TIME_SPAN + 1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64
 )
-cov_matrix = np.full(
+cov_matrix = np.zeros(
     (
         NUM_CYCLES + 1,
         TIME_SPAN + 1,
         UNIFIED_STATE_SPACE_DIMENSION,
         UNIFIED_STATE_SPACE_DIMENSION,
     ),
-    -1,
     dtype=np.float64,
 )
 
@@ -751,9 +744,17 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     K = cov_matrix[cycle, time, :, :] @ H.T @ np.linalg.pinv(S)
 
     mean_vec[cycle + 1, time, :] += K @ v
-    cov_matrix[cycle + 1, time, :, :] -= K @ S @ K.T
-
-    cov_matrix[cycle + 1, time, :, :] = cov_cleanup(cov_matrix[cycle + 1, time, :, :])
+    # cov_matrix[cycle + 1, time, :, :] -= K @ S @ K.T
+    # Joseph form update (See e.g. https://www.anuncommonlab.com/articles/how-kalman-filters-work/part2.html)
+    A = np.eye(cov_matrix.shape[-1]) - K @ H
+    cov_matrix[cycle + 1, time, :, :] = np.nan_to_num(
+        A @ cov_matrix[cycle + 1, time, :, :] @ A.T + K @ R @ K.T
+    )
+    min_diag = np.min(np.diag(cov_matrix[cycle + 1, time, :, :]))
+    if min_diag <= 0.0:
+        cov_matrix[cycle + 1, time, :, :] += (1e-6 - min_diag) * np.eye(
+            cov_matrix.shape[-1]
+        )
 
     ################################################################################
     # recreate ensemble with new distribution
@@ -1185,14 +1186,18 @@ surprisal_full = (
 
 #####
 # state surprisal: restrict to just the state vars
-delta_state = mean_vec[:, :, : len(state_vars)] - vp_trajectory[:, : len(state_vars)]
+delta_state = (
+    mean_vec[:, :, : len(state_vars)]
+    - transform_intrinsic_to_kf(vp_trajectory)[:, : len(state_vars)]
+)
 _, logdet = slogdet(cov_matrix[:, :, : len(state_vars), : len(state_vars)])
 sigma_inv_delta = np.array(
     [
         [
             np.linalg.lstsq(
                 cov_matrix[cycle, t_idx, : len(state_vars), : len(state_vars)],
-                delta_state[cycle, t_idx, :], rcond=None
+                delta_state[cycle, t_idx, :],
+                rcond=None,
             )[0]
             for t_idx in range(cov_matrix.shape[1])
         ]
@@ -1206,7 +1211,7 @@ surprisal_state = (
 
 #####
 # param surprisal: restrict to just the params
-vp_param_trajectory = vp_trajectory[:, len(state_vars) :]
+vp_param_trajectory = transform_intrinsic_to_kf(vp_trajectory)[:, len(state_vars) :]
 
 delta_param = mean_vec[:, :, len(state_vars) :] - vp_param_trajectory
 _, logdet = slogdet(cov_matrix[:, :, len(state_vars) :, len(state_vars) :])
@@ -1215,7 +1220,8 @@ sigma_inv_delta = np.array(
         [
             np.linalg.lstsq(
                 cov_matrix[cycle, t_idx, len(state_vars) :, len(state_vars) :],
-                delta_param[cycle, t_idx, :], rcond=None
+                delta_param[cycle, t_idx, :],
+                rcond=None,
             )[0]
             for t_idx in range(cov_matrix.shape[1])
         ]

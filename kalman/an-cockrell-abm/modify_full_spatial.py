@@ -604,11 +604,11 @@ def modify_model(
     # sanity check on updated epithelium TODO: other checks
     for epitype in EpiType:
         if epitype == EpiType.Infected:
-            model.epi_intracellular_virus[
-                model.epithelium == EpiType.Infected
-            ] = np.maximum(
-                1,
-                model.epi_intracellular_virus[model.epithelium == EpiType.Infected],
+            model.epi_intracellular_virus[model.epithelium == EpiType.Infected] = (
+                np.maximum(
+                    1,
+                    model.epi_intracellular_virus[model.epithelium == EpiType.Infected],
+                )
             )
         else:
             model.epi_intracellular_virus[model.epithelium == epitype] = 0
@@ -624,10 +624,10 @@ def modify_model(
             * (desired_total_intracellular_virus / model.total_intracellular_virus),
         ).astype(int)
         # ensure that there is at least one virus in each infected cell
-        model.epi_intracellular_virus[
-            model.epithelium == EpiType.Infected
-        ] = np.maximum(
-            1, model.epi_intracellular_virus[model.epithelium == EpiType.Infected]
+        model.epi_intracellular_virus[model.epithelium == EpiType.Infected] = (
+            np.maximum(
+                1, model.epi_intracellular_virus[model.epithelium == EpiType.Infected]
+            )
         )
 
     model.apoptosis_eaten_counter = int(
