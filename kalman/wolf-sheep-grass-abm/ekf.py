@@ -7,7 +7,6 @@ from typing import Final
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
-import scipy
 from scipy.stats import multivariate_normal
 from tqdm import tqdm
 from wolf_sheep_grass import WolfSheepGrassModel
@@ -856,34 +855,15 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     kalman_K.append(K)
 
     mean_vec[cycle + 1, time, :] += K @ v
-    cov_matrix[cycle + 1, time, :, :] -= K @ S @ K.T
-
-    # numerical cleanup: symmetrize and project onto pos def cone
+    # cov_matrix[cycle + 1, time, :, :] -= K @ S @ K.T
+    # Joseph form update (See e.g. https://www.anuncommonlab.com/articles/how-kalman-filters-work/part2.html)
+    A = np.eye(cov_matrix.shape[-1]) - K @ H
     cov_matrix[cycle + 1, time, :, :] = np.nan_to_num(
-        (
-            np.nan_to_num(cov_matrix[cycle + 1, time, :, :])
-            + np.nan_to_num(cov_matrix[cycle + 1, time, :, :].T)
-        )
-        / 2.0
+        A @ cov_matrix[cycle + 1, time, :, :] @ A.T + K @ R @ K.T
     )
-    eigenvalues, eigenvectors = scipy.linalg.eigh(
-        cov_matrix[cycle + 1, time, :, :], lower=True, check_finite=False
-    )
-    eigenvalues[:] = np.real(eigenvalues)  # just making sure
-    eigenvectors[:, :] = np.real(eigenvectors)  # just making sure
-    # spectrum must be positive.
-    # from the scipy code, it also can't have a max/min e-val ratio bigger than 1/(1e6*double machine epsilon)
-    # and that's ~4503599627.370496=1/(1e6*np.finfo('d').eps), so a ratio bounded by 1e9 is ok.
-    cov_matrix[cycle + 1, time, :, :] = (
-        eigenvectors @ np.diag(np.minimum(1e5, np.maximum(1e-4, eigenvalues))) @ eigenvectors.T
-    )
-    cov_matrix[cycle + 1, time, :, :] = np.nan_to_num(
-        (
-            np.nan_to_num(cov_matrix[cycle + 1, time, :, :])
-            + np.nan_to_num(cov_matrix[cycle + 1, time, :, :].T)
-        )
-        / 2.0
-    )
+    min_diag = np.min(np.diag(cov_matrix[cycle + 1, time, :, :]))
+    if min_diag <= 0.0:
+        cov_matrix[cycle + 1, time, :, :] += (1e-6 - min_diag) * np.eye(cov_matrix.shape[-1])
 
     # recreate ensemble
     dist = multivariate_normal(
@@ -936,9 +916,9 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                             macro_data[model_idx, :] - new_sample[possible_sample_pair, :]
                         )
                         if proposed_pair_dist < established_pair_dist:
-                            model_to_sample_pairing[
-                                competitor_model_idx
-                            ] = -1  # free the competitor
+                            model_to_sample_pairing[competitor_model_idx] = (
+                                -1
+                            )  # free the competitor
                             all_paired = False
                             # make new pair
                             sample_to_model_pairing[possible_sample_pair] = model_idx

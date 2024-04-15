@@ -22,13 +22,7 @@ from consts import (
     variational_params,
 )
 from transform import transform_intrinsic_to_kf, transform_kf_to_intrinsic
-from util import (
-    cov_cleanup,
-    fix_title,
-    gale_shapely_matching,
-    model_macro_data,
-    slogdet,
-)
+from util import fix_title, gale_shapely_matching, model_macro_data, slogdet
 
 ################################################################################
 
@@ -751,9 +745,17 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     K = cov_matrix[cycle, time, :, :] @ H.T @ np.linalg.pinv(S)
 
     mean_vec[cycle + 1, time, :] += K @ v
-    cov_matrix[cycle + 1, time, :, :] -= K @ S @ K.T
-
-    cov_matrix[cycle + 1, time, :, :] = cov_cleanup(cov_matrix[cycle + 1, time, :, :])
+    # cov_matrix[cycle + 1, time, :, :] -= K @ S @ K.T
+    # Joseph form update (See e.g. https://www.anuncommonlab.com/articles/how-kalman-filters-work/part2.html)
+    A = np.eye(cov_matrix.shape[-1]) - K @ H
+    cov_matrix[cycle + 1, time, :, :] = np.nan_to_num(
+        A @ cov_matrix[cycle + 1, time, :, :] @ A.T + K @ R @ K.T
+    )
+    min_diag = np.min(np.diag(cov_matrix[cycle + 1, time, :, :]))
+    if min_diag <= 0.0:
+        cov_matrix[cycle + 1, time, :, :] += (1e-6 - min_diag) * np.eye(
+            cov_matrix.shape[-1]
+        )
 
     ################################################################################
     # recreate ensemble with new distribution
