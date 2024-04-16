@@ -154,9 +154,23 @@ import numpy as np
 # 40    "inflammasome_macro_pre_il1_secretion"
 
 
-# use a slight shift on the log-transform as variables can be exactly zero
-# and arithmetic using -inf=np.log(0.0) gives poor results.
-__EPSILON__ = 1e-3
+# use a shift on the log-transform as variables can be exactly zero
+# and arithmetic using -inf=np.log(0.0) gives poor results. Using
+# np.log1p(x) and np.expm1, which implement log(1+x) and exp(x)-1
+# to high accuracy.
+#
+# The transforms map
+# log1p: (-1,inf) -> (-inf,inf)
+# expm1: (-inf,inf) -> (-1,inf)
+# but on the region of interest, restrict to
+# log1p: [0,inf) -> [0,inf)
+# expm1: [0,inf) -> [0,inf)
+# Our Gaussian distributions lie in the transformed space and are
+# (-inf,inf) valued. Taking them back to intrinsic space via expm1,
+# you can then get undesired values in (-1,0), so in reality, we
+# use max(0.0,expm1(x)). This leads to distributions on the intrinsic
+# space which are approximately log-normal, but hug zero more and
+# even have dirac-type support at 0.0.
 
 
 def transform_intrinsic_to_kf(
@@ -171,11 +185,11 @@ def transform_intrinsic_to_kf(
     """
     if index == -1:
         # full state
-        retval = np.log(__EPSILON__ + macrostate_intrinsic)
+        retval = np.log1p(macrostate_intrinsic)
         return retval
     else:
         # parameters
-        return np.log(__EPSILON__ + macrostate_intrinsic)
+        return np.log1p(macrostate_intrinsic)
 
 
 def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, index=-1) -> np.ndarray:
@@ -188,8 +202,8 @@ def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, index=-1) -> np.ndar
     """
     if index == -1:
         # full state
-        retval = np.maximum(0.0, np.exp(macrostate_kf) - __EPSILON__)
+        retval = np.maximum(0.0, np.expm1(macrostate_kf))
         return retval
     else:
         # parameters
-        return np.maximum(0.0, np.exp(macrostate_kf) - __EPSILON__)
+        return np.maximum(0.0, np.expm1(macrostate_kf))
