@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from an_cockrell import AnCockrellModel
 from scipy.stats import multivariate_normal
-from sklearn.covariance import LedoitWolf
+# from sklearn.covariance import LedoitWolf
 from tqdm.auto import tqdm
 
 from consts import (
@@ -368,18 +368,18 @@ cov_matrix = np.zeros(
     dtype=np.float64,
 )
 
-lw = LedoitWolf(assume_centered=False)
+# lw = LedoitWolf(assume_centered=False)
 
 # collect initial statistics
 time = 0
 macro_data = np.array(
     [transform_intrinsic_to_kf(model_macro_data(model)) for model in model_ensemble]
 )
-# mean_vec[:, time, :] = np.mean(macro_data, axis=0)
-# cov_matrix[:, time, :, :] = np.cov(macro_data, rowvar=False)
-lw.fit(macro_data)
-mean_vec[:, time, :] = lw.location_
-cov_matrix[:, time, :, :] = lw.covariance_
+mean_vec[:, time, :] = np.mean(macro_data, axis=0)
+cov_matrix[:, time, :, :] = np.cov(macro_data, rowvar=False)
+# lw.fit(macro_data)
+# mean_vec[:, time, :] = lw.location_
+# cov_matrix[:, time, :, :] = lw.covariance_
 
 for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     # advance ensemble of models
@@ -411,11 +411,11 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 for model in model_ensemble
             ]
         )
-        # mean_vec[cycle:, time, :] = np.mean(macro_data, axis=0)
-        # cov_matrix[cycle:, time, :, :] = np.cov(macro_data, rowvar=False)
-        lw.fit(macro_data)
-        mean_vec[cycle:, time, :] = lw.location_
-        cov_matrix[cycle:, time, :, :] = lw.covariance_
+        mean_vec[cycle:, time, :] = np.mean(macro_data, axis=0)
+        cov_matrix[cycle:, time, :, :] = np.cov(macro_data, rowvar=False)
+        # lw.fit(macro_data)
+        # mean_vec[cycle:, time, :] = lw.location_
+        # cov_matrix[cycle:, time, :, :] = lw.covariance_
 
     if PREDICT != "to-kf-update":
         # make copy of the models and advance them to the end of the simulation time
@@ -455,11 +455,11 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                     for model in model_ensemble_copy
                 ]
             )
-            # mean_vec[cycle:, future_time, :] = np.mean(macro_data, axis=0)
-            # cov_matrix[cycle:, future_time, :, :] = np.cov(macro_data, rowvar=False)
-            lw.fit(macro_data)
-            mean_vec[cycle:, future_time, :] = lw.location_
-            cov_matrix[cycle:, future_time, :, :] = lw.covariance_
+            mean_vec[cycle:, future_time, :] = np.mean(macro_data, axis=0)
+            cov_matrix[cycle:, future_time, :, :] = np.cov(macro_data, rowvar=False)
+            # lw.fit(macro_data)
+            # mean_vec[cycle:, future_time, :] = lw.location_
+            # cov_matrix[cycle:, future_time, :, :] = lw.covariance_
 
     ################################################################################
     # plot projection of state variables
