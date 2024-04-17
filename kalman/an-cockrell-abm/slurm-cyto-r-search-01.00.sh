@@ -5,7 +5,7 @@
 #SBATCH --nodes=1                           # Use one node (non-MPI)
 #SBATCH --ntasks=1                          # Run a single task (non-MPI)
 #SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=8gb                   # Memory per job
+#SBATCH --mem-per-cpu=4gb                   # Memory per job
 #SBATCH --time=72:00:00                     # Time limit hrs:min:sec
 #SBATCH --output=c01.00-array_%A-%a.out      # Standard output and error log
 #SBATCH --array=0-100                       # Array range
