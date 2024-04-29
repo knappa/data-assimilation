@@ -1,5 +1,6 @@
 import numpy as np
 
+__EPSILON__ = 1e-3
 
 def transform_intrinsic_to_kf(macrostate_intrinsic: np.ndarray, *, index=-1) -> np.ndarray:
     """
@@ -9,18 +10,17 @@ def transform_intrinsic_to_kf(macrostate_intrinsic: np.ndarray, *, index=-1) -> 
     :param index: which index to transform, for arrays with single components
     :return: normalized macrostate for kf
     """
-    epsilon = 1e-3
     if index == -1:
         # full state
         retval = np.zeros_like(macrostate_intrinsic)
-        retval[..., 0] = np.log(np.maximum(epsilon, macrostate_intrinsic[..., 0]))
+        retval[..., 0] = np.log(__EPSILON__ + macrostate_intrinsic[..., 0])
         retval[..., 1] = macrostate_intrinsic[..., 1] / 10
         retval[..., 2] = macrostate_intrinsic[..., 2] / 100
         retval[..., 3:] = macrostate_intrinsic[..., 3:]
         return retval
     elif index == 0:
         # wolves
-        return np.log(np.maximum(epsilon, macrostate_intrinsic))
+        return np.log(__EPSILON__ + macrostate_intrinsic)
     elif index == 1:
         # sheep
         return macrostate_intrinsic / 10
@@ -43,14 +43,14 @@ def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, index=-1) -> np.ndar
     if index == -1:
         # full state
         retval = np.zeros_like(macrostate_kf)
-        retval[..., 0] = np.exp(macrostate_kf[..., 0])
+        retval[..., 0] = np.maximum(0.0, np.exp(macrostate_kf[..., 0]) - __EPSILON__)
         retval[..., 1] = np.maximum(0.0, macrostate_kf[..., 1]) * 10
         retval[..., 2] = np.maximum(0.0, macrostate_kf[..., 2]) * 100
         retval[..., 3:] = np.maximum(0.0, macrostate_kf[..., 3:])
         return retval
     elif index == 0:
         # wolves
-        return np.exp(macrostate_kf)
+        return np.maximum(0.0, np.exp(macrostate_kf) - __EPSILON__)
     elif index == 1:
         # sheep
         return np.maximum(0.0, macrostate_kf) * 10
