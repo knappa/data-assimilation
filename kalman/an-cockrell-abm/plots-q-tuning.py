@@ -2,21 +2,18 @@ import os
 
 import h5py
 import matplotlib as mpl
-import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.legend_handler import HandlerBase
 
-from transform import transform_kf_to_intrinsic
-
 fig, axs = plt.subplots(1, 1, figsize=(6.5, 5), sharex=True)
 
 finals = []
-for p_idx, prefix in enumerate(["10.00", "01.00", "00.10", "00.01"]):
+for p_idx, prefix in enumerate(["0.001", "0.005", "0.010", "0.050"]):
     files = [
         f
         for f in os.listdir(".")
-        if os.path.isfile(f) and f.startswith("cyt-" + prefix) and f.endswith(".hdf5")
+        if os.path.isfile(f) and f.startswith("q-" + prefix) and f.endswith(".hdf5")
     ]
     surp_final = []
     for file in files:
@@ -43,7 +40,7 @@ axs.set_xlabel("time")
 # noinspection PyTypeChecker
 class AnyObjectHandler(HandlerBase):
     def create_artists(
-        self, legend, orig_handle, x0, y0, width, height, fontsize, trans
+            self, legend, orig_handle, x0, y0, width, height, fontsize, trans
     ):
         size = len(orig_handle)
         ls = []
@@ -71,5 +68,5 @@ axs.legend(
 
 fig.suptitle("Surprisal after measurement")
 fig.tight_layout()
-fig.savefig("an-cockrell-r-measurement-uncertainty.pdf")
+fig.savefig("an-cockrell-q-process-stochasticity.pdf")
 plt.close(fig)
