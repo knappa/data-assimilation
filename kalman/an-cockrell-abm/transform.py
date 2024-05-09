@@ -35,7 +35,7 @@ import numpy as np
 #     # INSENSITIVE "susceptibility_to_infection",
 #     "human_endo_activation",
 #     "human_metabolic_byproduct",
-#     "resistance_to_infection",
+#     # NOT USED "resistance_to_infection",
 #     "viral_incubation_threshold",
 #     "epi_apoptosis_threshold_lower",
 #     # INSENSITIVE "epi_apoptosis_threshold_range",
@@ -136,22 +136,22 @@ import numpy as np
 # 22    "inflammasome_activation_threshold"
 # 23    "human_endo_activation"
 # 24    "human_metabolic_byproduct"
-# 25    "resistance_to_infection"
-# 26    "viral_incubation_threshold"
-# 27    "epi_apoptosis_threshold_lower"
-# 28    "epithelium_ros_damage_counter_threshold"
-# 29    "epithelium_pdamps_secretion_on_death"
-# 30    "infected_epi_t1ifn_secretion"
-# 31    "activated_endo_death_threshold"
-# 32    "activated_endo_pmn_spawn_prob"
-# 33    "activated_endo_pmn_spawn_dist"
-# 34    "extracellular_virus_init_amount_lower"
-# 35    "pmn_ros_secretion_on_death"
-# 36    "pmn_il1_secretion_on_death"
-# 37    "macro_activation_threshold"
-# 38    "activated_macro_tnf_secretion"
-# 39    "inflammasome_il1_secretion"
-# 40    "inflammasome_macro_pre_il1_secretion"
+# PREVIOUS 25 resistance to infection, was unused in model
+# 25    "viral_incubation_threshold"
+# 26    "epi_apoptosis_threshold_lower"
+# 27    "epithelium_ros_damage_counter_threshold"
+# 28    "epithelium_pdamps_secretion_on_death"
+# 29    "infected_epi_t1ifn_secretion"
+# 30    "activated_endo_death_threshold"
+# 31    "activated_endo_pmn_spawn_prob"
+# 32    "activated_endo_pmn_spawn_dist"
+# 33    "extracellular_virus_init_amount_lower"
+# 34    "pmn_ros_secretion_on_death"
+# 35    "pmn_il1_secretion_on_death"
+# 36    "macro_activation_threshold"
+# 37    "activated_macro_tnf_secretion"
+# 38    "inflammasome_il1_secretion"
+# 30    "inflammasome_macro_pre_il1_secretion"
 
 
 # use a slight shift on the log-transform as variables can be exactly zero
