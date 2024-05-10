@@ -8,7 +8,21 @@ from matplotlib.legend_handler import HandlerBase
 
 from transform import transform_kf_to_intrinsic
 
-fig, axs = plt.subplots(2, 2, figsize=(6, 5), sharex=True, sharey=True)
+
+SMALL_SIZE = 8
+MEDIUM_SIZE = 10
+BIGGER_SIZE = 12
+
+plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
+plt.rc('axes', titlesize=SMALL_SIZE)     # fontsize of the axes title
+plt.rc('axes', labelsize=MEDIUM_SIZE)    # fontsize of the x and y labels
+plt.rc('xtick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
+plt.rc('ytick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
+plt.rc('legend', fontsize=SMALL_SIZE)    # legend fontsize
+plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
+
+
+fig, axs = plt.subplots(1, 4, figsize=(13, 3), sharex=True, sharey=True, width_ratios=[1.0,1.0,1.0,0.5])
 
 orgs = []
 finals = []
@@ -30,7 +44,7 @@ for p_idx, prefix in enumerate(["0.001", "0.005", "0.010", "0.050"]):
     surp_final = np.array(surp_final)
 
     orgs.append(
-        axs[0, 0].plot(
+        axs[0].plot(
             np.median(surp_init, axis=0),
             label="original surprisal",
             color=mpl.colormaps["tab10"](p_idx),
@@ -38,16 +52,16 @@ for p_idx, prefix in enumerate(["0.001", "0.005", "0.010", "0.050"]):
         )[0]
     )
     finals.append(
-        axs[0, 0].plot(
+        axs[0].plot(
             np.median(surp_final, axis=0)[:-1],
-            label="final " + prefix,
+            label="Process stoch. " + prefix,
             color=mpl.colormaps["tab10"](p_idx),
         )[0]
     )
 
-axs[0, 0].set_ylabel("surprisal")
-axs[0, 0].set_xlabel("time")
-axs[0, 0].title.set_text("Measuring Grass")
+axs[0].set_ylabel("surprisal")
+axs[0].set_xlabel("time")
+axs[0].title.set_text("Measuring Grass")
 
 ################################################################################
 
@@ -72,7 +86,7 @@ for p_idx, prefix in enumerate(["0.001", "0.005", "0.010", "0.050"]):
     print(surp_init.shape)
 
     orgs.append(
-        axs[0, 1].plot(
+        axs[1].plot(
             np.median(surp_init, axis=0),
             label="surprisal w/o KF",
             color=mpl.colormaps["tab10"](p_idx),
@@ -80,16 +94,16 @@ for p_idx, prefix in enumerate(["0.001", "0.005", "0.010", "0.050"]):
         )[0]
     )
     finals.append(
-        axs[0, 1].plot(
+        axs[1].plot(
             np.median(surp_final, axis=0)[:-1],
             label="Process stoch. " + prefix,
             color=mpl.colormaps["tab10"](p_idx),
         )[0]
     )
 
-axs[0, 1].set_ylabel("surprisal")
-axs[0, 1].set_xlabel("time")
-axs[0, 1].title.set_text("Measuring Sheep")
+# axs[1].set_ylabel("surprisal")
+axs[1].set_xlabel("time")
+axs[1].title.set_text("Measuring Sheep")
 
 ################################################################################
 
@@ -114,7 +128,7 @@ for p_idx, prefix in enumerate(["0.001", "0.005", "0.010", "0.050"]):
     print(surp_init.shape)
 
     orgs.append(
-        axs[1, 0].plot(
+        axs[2].plot(
             np.median(surp_init, axis=0),
             label="original surprisal",
             color=mpl.colormaps["tab10"](p_idx),
@@ -122,19 +136,16 @@ for p_idx, prefix in enumerate(["0.001", "0.005", "0.010", "0.050"]):
         )[0]
     )
     finals.append(
-        axs[1, 0].plot(
+        axs[2].plot(
             np.median(surp_final, axis=0)[:-1],
             label="Process stoch. " + prefix,
             color=mpl.colormaps["tab10"](p_idx),
         )[0]
     )
 
-axs[1, 0].set_ylabel("surprisal")
-axs[1, 0].set_xlabel("time")
-axs[1, 0].title.set_text("Measuring Wolves")
-
-axs[1, 1].axes.set_axis_off()
-
+# axs[2].set_ylabel("surprisal")
+axs[2].set_xlabel("time")
+axs[2].title.set_text("Measuring Wolves")
 
 class AnyObjectHandler(HandlerBase):
     def create_artists(self, legend, orig_handle, x0, y0, width, height, fontsize, trans):
@@ -153,17 +164,23 @@ class AnyObjectHandler(HandlerBase):
 
         return ls
 
-
-axs[1, 1].legend(
+axs[3].set_axis_off()
+axs[3].legend(
     tuple(zip(finals, orgs)),
     [*map(lambda x: x.get_label(), finals)],
-    loc="upper left",
+    loc="center",
     handler_map={tuple: AnyObjectHandler()},
 )
 
-fig.suptitle("Surprisal after measurement")
+fig.suptitle("Effect of varying process stochasticity")
+# plt.subplots_adjust( top = 0.768,
+#     bottom = 0.201,
+#     left = 0.054,
+#     right = 0.955,
+#     hspace = 0.11,
+#     wspace = 0.274)
 fig.tight_layout()
-fig.savefig("q-measurement-uncertainty.pdf")
+fig.savefig("q-measurement-uncertainty.pdf", bbox_inches="tight")
 plt.close(fig)
 
 ################################################################################
