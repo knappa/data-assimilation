@@ -1,18 +1,115 @@
 #!/usr/bin/env python3
 # coding: utf-8
 
+
+import an_cockrell
+import h5py
+import numpy as np
+from an_cockrell import EpiType
+from scipy.stats.qmc import LatinHypercube
+from tqdm.auto import trange
+
 # # An-Cockrell model reimplementation
 
-import h5py
-import matplotlib.pyplot as plt
-import numpy as np
+# constants
+init_inoculum = 100
+num_sims = 10_000
+num_steps = 2016  # <- full run value
 
-# from consts import variational_params
+default_params = dict(
+    GRID_WIDTH=51,
+    GRID_HEIGHT=51,
+    is_bat=False,
+    init_inoculum=100,
+    init_dcs=50,
+    init_nks=25,
+    init_macros=50,
+    macro_phago_recovery=0.5,
+    macro_phago_limit=1_000,
+    inflammasome_activation_threshold=10,  # default 50 for bats
+    inflammasome_priming_threshold=1.0,  # default 5.0 for bats
+    viral_carrying_capacity=500,
+    susceptibility_to_infection=77,
+    human_endo_activation=5,
+    bat_endo_activation=10,
+    bat_metabolic_byproduct=2.0,
+    human_metabolic_byproduct=0.2,
+    viral_incubation_threshold=60,
+    epi_apoptosis_threshold_lower=450,
+    epi_apoptosis_threshold_range=100,
+    epi_apoptosis_threshold_lower_regrow=475,
+    epi_apoptosis_threshold_range_regrow=51,
+    epi_regrowth_counter_threshold=432,
+    epi_cell_membrane_init_lower=975,
+    epi_cell_membrane_init_range=51,
+    infected_epithelium_ros_damage_counter_threshold=10,
+    epithelium_ros_damage_counter_threshold=2,
+    epithelium_pdamps_secretion_on_death=10.0,
+    dead_epithelium_pdamps_burst_secretion=10.0,
+    dead_epithelium_pdamps_secretion=1.0,
+    epi_max_tnf_uptake=0.1,
+    epi_max_il1_uptake=0.1,
+    epi_t1ifn_secretion=0.75,
+    epi_t1ifn_secretion_prob=0.01,
+    epi_pdamps_secretion_prob=0.01,
+    infected_epi_t1ifn_secretion=1.0,
+    infected_epi_il18_secretion=0.11,
+    infected_epi_il6_secretion=0.10,
+    activated_endo_death_threshold=0.5,
+    activated_endo_adhesion_threshold=36.0,
+    activated_endo_pmn_spawn_prob=0.1,
+    activated_endo_pmn_spawn_dist=5.0,
+    extracellular_virus_init_amount_lower=80,
+    extracellular_virus_init_amount_range=40,
+    human_viral_lower_bound=0.0,
+    human_t1ifn_effect_scale=0.01,
+    pmn_max_age=36,
+    pmn_ros_secretion_on_death=10.0,
+    pmn_il1_secretion_on_death=1.0,
+    nk_ifng_secretion=1.0,
+    macro_max_virus_uptake=10.0,
+    macro_activation_threshold=5.0,
+    activated_macro_il8_secretion=1.0,
+    activated_macro_il12_secretion=0.5,
+    activated_macro_tnf_secretion=1.0,
+    activated_macro_il6_secretion=0.4,
+    activated_macro_il10_secretion=1.0,
+    macro_antiactivation_threshold=5.0,
+    antiactivated_macro_il10_secretion=0.5,
+    inflammasome_il1_secretion=1.0,
+    inflammasome_macro_pre_il1_secretion=5.0,
+    inflammasome_il18_secretion=1.0,
+    inflammasome_macro_pre_il18_secretion=0.5,
+    pyroptosis_macro_pdamps_secretion=10.0,
+    dc_t1ifn_activation_threshold=1.0,
+    dc_il12_secretion=0.5,
+    dc_ifng_secretion=0.5,
+    dc_il6_secretion=0.4,
+    dc_il6_max_uptake=0.1,
+    extracellular_virus_diffusion_const=0.05,
+    T1IFN_diffusion_const=0.1,
+    PAF_diffusion_const=0.1,
+    ROS_diffusion_const=0.1,
+    P_DAMPS_diffusion_const=0.1,
+    IFNg_diffusion_const=0.2,
+    TNF_diffusion_const=0.2,
+    IL6_diffusion_const=0.2,
+    IL1_diffusion_const=0.2,
+    IL10_diffusion_const=0.2,
+    IL12_diffusion_const=0.2,
+    IL18_diffusion_const=0.2,
+    IL8_diffusion_const=0.3,
+    extracellular_virus_cleanup_threshold=0.05,
+    cleanup_threshold=0.1,
+    evap_const_1=0.99,
+    evap_const_2=0.9,
+)
 
-GRAPHS = False
-
-# true parameters of the model
 variational_params = [
+    "init_inoculum",
+    "init_dcs",
+    "init_nks",
+    "init_macros",
     "macro_phago_recovery",
     "macro_phago_limit",
     "inflammasome_activation_threshold",
@@ -21,7 +118,6 @@ variational_params = [
     "susceptibility_to_infection",
     "human_endo_activation",
     "human_metabolic_byproduct",
-    "resistance_to_infection",  # NOT USED
     "viral_incubation_threshold",
     "epi_apoptosis_threshold_lower",
     "epi_apoptosis_threshold_range",
@@ -56,12 +152,12 @@ variational_params = [
     "nk_ifng_secretion",
     "macro_max_virus_uptake",
     "macro_activation_threshold",
-    "macro_antiactivation_threshold",
     "activated_macro_il8_secretion",
     "activated_macro_il12_secretion",
     "activated_macro_tnf_secretion",
     "activated_macro_il6_secretion",
     "activated_macro_il10_secretion",
+    "macro_antiactivation_threshold",
     "antiactivated_macro_il10_secretion",
     "inflammasome_il1_secretion",
     "inflammasome_macro_pre_il1_secretion",
@@ -74,9 +170,7 @@ variational_params = [
     "dc_il6_secretion",
     "dc_il6_max_uptake",
     # # ACK's Executive Judgement: These are physics-like parameters and won't vary between individuals.
-    # # They also include model-intrinsic things like a cleanup thresholds which don't precisely
-    # # correspond to read world objects.
-    # "human_viral_lower_bound", # 0.0
+    # "human_viral_lower_bound", 0.0
     # "extracellular_virus_diffusion_const",
     # "T1IFN_diffusion_const",
     # "PAF_diffusion_const",
@@ -96,283 +190,290 @@ variational_params = [
     # "evap_const_2",
 ]
 
-variational_params_filtered = [
-    s for s in variational_params if s != "human_viral_lower_bound"
-]
-variational_params_aug = np.array(variational_params + ["bias"])
-variational_params_filtered_aug = np.array(variational_params_filtered + ["bias"])
-varp_idcs = {str(vp): i for i, vp in enumerate(variational_params_aug)}
-varpf_idcs = {str(vp): i for i, vp in enumerate(variational_params_filtered_aug)}
+param_list = np.full((num_sims, len(variational_params)), -1, dtype=np.float64)
+total_P_DAMPS = np.full((num_sims, num_steps), -1, dtype=np.float64)
+total_T1IFN = np.full((num_sims, num_steps), -1, dtype=np.float64)
+total_TNF = np.full((num_sims, num_steps), -1, dtype=np.float64)
+total_IFNg = np.full((num_sims, num_steps), -1, dtype=np.float64)
+total_IL6 = np.full((num_sims, num_steps), -1, dtype=np.float64)
+total_IL1 = np.full((num_sims, num_steps), -1, dtype=np.float64)
+total_IL8 = np.full((num_sims, num_steps), -1, dtype=np.float64)
+total_IL10 = np.full((num_sims, num_steps), -1, dtype=np.float64)
+total_IL12 = np.full((num_sims, num_steps), -1, dtype=np.float64)
+total_IL18 = np.full((num_sims, num_steps), -1, dtype=np.float64)
+total_extracellular_virus = np.full((num_sims, num_steps), -1, dtype=np.float64)
+total_intracellular_virus = np.full((num_sims, num_steps), -1, dtype=np.float64)
+apoptosis_eaten_counter = np.full((num_sims, num_steps), -1, dtype=np.float64)
+infected_epis = np.full((num_sims, num_steps), -1, dtype=np.float64)
+dead_epis = np.full((num_sims, num_steps), -1, dtype=np.float64)
+apoptosed_epis = np.full((num_sims, num_steps), -1, dtype=np.float64)
+system_health = np.full((num_sims, num_steps), -1, dtype=np.float64)
 
-# with h5py.File("run-statistics.hdf5", "r") as f:
-
-f = h5py.File("run-statistics.hdf5", "r")
-
-min_sys_health = np.min(f["system_health"][()], axis=1)
-param_list_filtered = f["param_list"][()][
-    :,
-    [
-        i
-        for i in range(len(variational_params))
-        if i != varp_idcs["human_viral_lower_bound"]
-    ],
-]
-
-param_list_filtered_aug = np.vstack(
-    [param_list_filtered.T, np.ones(len(param_list_filtered))[np.newaxis]]
-)
-
-least_squares_sol, residuals, rank, sing_vals = np.linalg.lstsq(
-    param_list_filtered_aug.T, min_sys_health, rcond=None
-)
-
-sort_indices = np.argsort(np.abs(least_squares_sol))
-sensitivity_dict = dict(
-    zip(variational_params_filtered_aug[sort_indices], least_squares_sol[sort_indices])
-)
-print(sensitivity_dict)
-
-if GRAPHS:
-    plt.plot(np.abs(least_squares_sol[np.argsort(np.abs(least_squares_sol))]))
-
-epsilon = np.exp(-25)
-log_min_sys_health = np.log(np.maximum(epsilon, np.min(f["system_health"][()], axis=1)))
-
-# log_param_list_filtered = log_param_list[
-#     :, [i for i in range(len(variational_params)) if i != varp_idcs["human_viral_lower_bound"]]
-# ]
-log_param_list_filtered = np.log(
-    f["param_list"][
-        :,
-        [
-            i
-            for i in range(len(variational_params))
-            if i != varp_idcs["human_viral_lower_bound"]
-        ],
-    ]
-)
-log_param_list_filtered_aug = np.vstack(
-    [log_param_list_filtered.T, np.ones(len(log_param_list_filtered))[np.newaxis]]
-)
-
-log_least_squares_sol, log_residuals, log_rank, log_sing_vals = np.linalg.lstsq(
-    log_param_list_filtered_aug.T, log_min_sys_health, rcond=None
-)
-
-if GRAPHS:
-    plt.plot(np.abs(least_squares_sol[np.argsort(np.abs(least_squares_sol))]))
-
-log_sort_indices = np.argsort(np.abs(log_least_squares_sol))
-log_sensitivity_dict = dict(
-    zip(
-        variational_params_filtered_aug[log_sort_indices],
-        log_least_squares_sol[log_sort_indices],
+with h5py.File("simulation-statistics.hdf5", "w") as f:
+    f.create_dataset(
+        "param_list",
+        (num_sims, len(variational_params)),
+        dtype=np.float64,
+        data=param_list,
+        chunks=(100, len(variational_params)),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
     )
-)
-print(log_sensitivity_dict)
+    f.create_dataset(
+        "total_P_DAMPS",
+        (num_sims, num_steps),
+        dtype=np.float64,
+        data=total_P_DAMPS,
+        chunks=(100, num_steps),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
+    )
+    f.create_dataset(
+        "total_T1IFN",
+        (num_sims, num_steps),
+        dtype=np.float64,
+        data=total_T1IFN,
+        chunks=(100, num_steps),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
+    )
+    f.create_dataset(
+        "total_TNF",
+        (num_sims, num_steps),
+        dtype=np.float64,
+        data=total_TNF,
+        chunks=(100, num_steps),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
+    )
+    f.create_dataset(
+        "total_IFNg",
+        (num_sims, num_steps),
+        dtype=np.float64,
+        data=total_IFNg,
+        chunks=(100, num_steps),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
+    )
+    f.create_dataset(
+        "total_IL6",
+        (num_sims, num_steps),
+        dtype=np.float64,
+        data=total_IL6,
+        chunks=(100, num_steps),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
+    )
+    f.create_dataset(
+        "total_IL1",
+        (num_sims, num_steps),
+        dtype=np.float64,
+        data=total_IL1,
+        chunks=(100, num_steps),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
+    )
+    f.create_dataset(
+        "total_IL8",
+        (num_sims, num_steps),
+        dtype=np.float64,
+        data=total_IL8,
+        chunks=(100, num_steps),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
+    )
+    f.create_dataset(
+        "total_IL10",
+        (num_sims, num_steps),
+        dtype=np.float64,
+        data=total_IL10,
+        chunks=(100, num_steps),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
+    )
+    f.create_dataset(
+        "total_IL12",
+        (num_sims, num_steps),
+        dtype=np.float64,
+        data=total_IL12,
+        chunks=(100, num_steps),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
+    )
+    f.create_dataset(
+        "total_IL18",
+        (num_sims, num_steps),
+        dtype=np.float64,
+        data=total_IL18,
+        chunks=(100, num_steps),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
+    )
+    f.create_dataset(
+        "total_extracellular_virus",
+        (num_sims, num_steps),
+        dtype=np.float64,
+        data=total_extracellular_virus,
+        chunks=(100, num_steps),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
+    )
+    f.create_dataset(
+        "total_intracellular_virus",
+        (num_sims, num_steps),
+        dtype=np.float64,
+        data=total_intracellular_virus,
+        chunks=(100, num_steps),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
+    )
+    f.create_dataset(
+        "apoptosis_eaten_counter",
+        (num_sims, num_steps),
+        dtype=np.float64,
+        data=apoptosis_eaten_counter,
+        chunks=(100, num_steps),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
+    )
+    f.create_dataset(
+        "infected_epis",
+        (num_sims, num_steps),
+        dtype=np.float64,
+        data=infected_epis,
+        chunks=(100, num_steps),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
+    )
+    f.create_dataset(
+        "dead_epis",
+        (num_sims, num_steps),
+        dtype=np.float64,
+        data=dead_epis,
+        chunks=(100, num_steps),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
+    )
+    f.create_dataset(
+        "apoptosed_epis",
+        (num_sims, num_steps),
+        dtype=np.float64,
+        data=apoptosed_epis,
+        chunks=(100, num_steps),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
+    )
+    f.create_dataset(
+        "system_health",
+        (num_sims, num_steps),
+        dtype=np.float64,
+        data=system_health,
+        chunks=(100, num_steps),
+        compression="gzip",
+        compression_opts=9,
+        shuffle=True,
+        fletcher32=True,
+    )
 
-if GRAPHS:
-    plt.plot(np.abs(least_squares_sol[np.argsort(np.abs(least_squares_sol))]))
 
-if GRAPHS:
-    fig, ax = plt.subplots()
-    ax.scatter(np.abs(least_squares_sol)[:-1], np.abs(log_least_squares_sol)[:-1])
-    plt.xlabel("abs sensitivity")
-    plt.ylabel("abs log sensitivity")
-    for i, txt in enumerate(variational_params_filtered):
-        ax.annotate(
-            txt, (np.abs(least_squares_sol)[i], np.abs(log_least_squares_sol)[i])
-        )
+lhc = LatinHypercube(len(variational_params))
+sample = 1.0 + 0.5 * (lhc.random(n=num_sims) - 0.5)  # between 75% and 125%
 
-################################################################################
-
-system_health = f["system_health"][()]
-
-if GRAPHS:
-    plt.hist(system_health.reshape(-1), bins=100, density=True)
-
-# compute sensitivity matrix
-system_health_sensitivity, sh_residuals, sh_rank, sh_sing_vals = np.linalg.lstsq(
-    param_list_filtered_aug.T, system_health, rcond=None
-)
-
-system_health_sensitivity_column_norm = np.linalg.norm(
-    system_health_sensitivity, axis=1
-)
-
-# compute log sensitivity matrix
-log_system_health = np.log(np.maximum(np.exp(-25), system_health))
-(
-    system_health_log_sensitivity,
-    log_sh_residuals,
-    log_sh_rank,
-    log_sh_sing_vals,
-) = np.linalg.lstsq(log_param_list_filtered_aug.T, log_system_health, rcond=None)
-system_health_log_sensitivity_column_norm = np.linalg.norm(
-    system_health_log_sensitivity, axis=1
-)
-
-if GRAPHS:
-    # matrix plot of sensitivity matrix, in chunks
-    fig, axs = plt.subplots(8, figsize=(8, 20))
-    for plt_idx in range(8):
-        axs[plt_idx].imshow(
-            np.abs(system_health_sensitivity[:, plt_idx * 252 : (plt_idx + 1) * 252]),
-            aspect=1,
-        )
-    fig.tight_layout()
-
-if GRAPHS:
-    # matrix plot of sensitivity matrix; relative time contribution, in chunks
-    fig, axs = plt.subplots(8, figsize=(8, 20))
-    for plt_idx in range(8):
-        axs[plt_idx].imshow(
-            np.abs(system_health_sensitivity[:, plt_idx * 252 : (plt_idx + 1) * 252])
-            / system_health_sensitivity_column_norm[:, np.newaxis],
-            aspect=1,
-        )
-    fig.tight_layout()
-
-if GRAPHS:
-    # matrix plot of log sensitivity matrix, in chunks
-    fig, axs = plt.subplots(8, figsize=(8, 20))
-    for plt_idx in range(8):
-        axs[plt_idx].imshow(
-            np.abs(
-                system_health_log_sensitivity[:, plt_idx * 252 : (plt_idx + 1) * 252]
-            ),
-            aspect=1,
-        )
-    fig.tight_layout()
-
-if GRAPHS:
-    # matrix plot of log sensitivity matrix; relative time contribution, in chunks
-    fig, axs = plt.subplots(8, figsize=(8, 20))
-    for plt_idx in range(8):
-        axs[plt_idx].imshow(
-            np.abs(
-                system_health_log_sensitivity[:, plt_idx * 252 : (plt_idx + 1) * 252]
+# noinspection PyTypeChecker
+for sim_idx in trange(num_sims, desc="simulation"):
+    # generate a perturbation of the default parameters
+    params = default_params.copy()
+    pct_perturbation = sample[sim_idx]
+    for pert_idx, param in enumerate(variational_params):
+        if isinstance(params[param], int):
+            params[param] = int(
+                round(float(pct_perturbation[pert_idx] * params[param]))
             )
-            / system_health_log_sensitivity_column_norm[:, np.newaxis],
-            aspect=1,
+        else:
+            params[param] = float(pct_perturbation[pert_idx] * params[param])
+
+    param_list[sim_idx, :] = np.array([params[param] for param in variational_params])
+
+    model = an_cockrell.AnCockrellModel(**params)
+
+    # noinspection PyTypeChecker
+    for step_idx in trange(num_steps):
+        model.time_step()
+
+        total_P_DAMPS[sim_idx, step_idx] = model.total_P_DAMPS
+        total_T1IFN[sim_idx, step_idx] = model.total_T1IFN
+        total_TNF[sim_idx, step_idx] = model.total_TNF
+        total_IFNg[sim_idx, step_idx] = model.total_IFNg
+        total_IL6[sim_idx, step_idx] = model.total_IL6
+        total_IL1[sim_idx, step_idx] = model.total_IL1
+        total_IL8[sim_idx, step_idx] = model.total_IL8
+        total_IL10[sim_idx, step_idx] = model.total_IL10
+        total_IL12[sim_idx, step_idx] = model.total_IL12
+        total_IL18[sim_idx, step_idx] = model.total_IL18
+        total_extracellular_virus[sim_idx, step_idx] = model.total_extracellular_virus
+        total_intracellular_virus[sim_idx, step_idx] = model.total_intracellular_virus
+        apoptosis_eaten_counter[sim_idx, step_idx] = model.apoptosis_eaten_counter
+        infected_epis[sim_idx, step_idx] = np.sum(model.epithelium == EpiType.Infected)
+        dead_epis[sim_idx, step_idx] = np.sum(model.epithelium == EpiType.Dead)
+        apoptosed_epis[sim_idx, step_idx] = np.sum(
+            model.epithelium == EpiType.Apoptosed
         )
-    fig.tight_layout()
+        system_health[sim_idx, step_idx] = model.system_health
 
-if GRAPHS:
-    # plot log sensitivity of components that are ever above min_sensitivity
-    min_sensitivity = 0.25
-    max_log_sensitivity = np.max(np.abs(system_health_log_sensitivity), axis=1)
-    plt.figure()
-    plt.plot(
-        system_health_log_sensitivity.T[:, max_log_sensitivity > min_sensitivity][
-            :, :-1
-        ],
-        label=variational_params_filtered_aug[max_log_sensitivity > min_sensitivity][
-            :-1
-        ],
-    )
-    plt.legend()
-    plt.tight_layout()
-
-# compute column-wise norms
-norm_sensitivity = np.linalg.norm(np.abs(system_health_sensitivity), axis=1)
-norm_log_sensitivity = np.linalg.norm(np.abs(system_health_log_sensitivity), axis=1)
-
-# indices of the top 10 by column-wise norm
-indices_top_ten = np.argsort(norm_sensitivity[:-1])[-10:]
-indices_top_ten_log = np.argsort(norm_log_sensitivity[:-1])[-10:]
-
-# collect names
-names_top_ten = set(variational_params_filtered_aug[indices_top_ten])
-names_top_ten_log = set(variational_params_filtered_aug[indices_top_ten_log])
-
-if GRAPHS:
-    # plot columns of log sensitivity matrix as time series, for top ten components
-    plt.figure()
-    plt.plot(
-        system_health_log_sensitivity.T[:, indices_top_ten_log],
-        label=variational_params_filtered_aug[indices_top_ten_log],
-    )
-    plt.legend()
-    plt.tight_layout()
-
-# how different are these?
-print(set(names_top_ten).intersection(names_top_ten_log))
-print(set(names_top_ten).union(names_top_ten_log))
-
-if GRAPHS:
-    # scatter
-    fig, ax = plt.subplots()
-    ax.scatter(norm_sensitivity[:-1], norm_log_sensitivity[:-1])
-    plt.xlabel("sensitivity")
-    plt.ylabel("log sensitivity")
-    for i, txt in enumerate(variational_params_filtered):
-        ax.annotate(txt, (norm_sensitivity[i], norm_log_sensitivity[i]))
-
-################################################################################
-# sensitivity by early/late infection
-
-early_cutoff = 750
-
-# compute log sensitivity matrix
-early_system_health_log_sensitivity, _, _, _ = np.linalg.lstsq(
-    log_param_list_filtered_aug.T, log_system_health[:, :early_cutoff], rcond=None
-)
-early_system_health_log_sensitivity_column_norm = np.linalg.norm(
-    early_system_health_log_sensitivity, axis=1
-)
-
-if GRAPHS:
-    fig = plt.figure()
-    plt.plot(early_system_health_log_sensitivity.T[:, :-1])
-
-early_indices_top_ten_log = np.argsort(
-    early_system_health_log_sensitivity_column_norm[:-1]
-)[-10:]
-
-################################################################################
-
-key_to_idx = {k: i for i, k in enumerate([k for k in f.keys() if k != "param_list"])}
-full_data = np.zeros((len(key_to_idx), *f["system_health"][()].shape), dtype=np.float64)
-for k, i in key_to_idx.items():
-    full_data[i, :] = f[k][()]
-full_data = np.transpose(full_data, axes=[1, 0, 2])
-
-full_data_log_sensitivity, _, _, _ = np.linalg.lstsq(
-    log_param_list_filtered_aug.T,
-    np.log(np.maximum(np.exp(-25), full_data.reshape((full_data.shape[0], -1)))),
-    rcond=None,
-)
-full_data_log_sensitivity_column_norm = np.linalg.norm(
-    full_data_log_sensitivity, axis=1
-)
-indices_full = np.argsort(full_data_log_sensitivity_column_norm[:-1])[-10:]
-names_full = set(variational_params_filtered_aug[indices_full])
-
-if GRAPHS:
-    fig, axs = plt.subplots(4, 4)
-    for idx, name in enumerate([k for k in f.keys() if k != "param_list"]):
-        row, col = divmod(idx, 4)
-        axs[row, col].plot(
-            full_data_log_sensitivity.reshape(
-                full_data_log_sensitivity.shape[0], *full_data.shape[1:]
-            )[:, idx, :].T
-        )
-        axs[row, col].set_title(name)
-    fig.tight_layout()
-
-if GRAPHS:
-    fig, axs = plt.subplots(4, 4, sharex=True, layout="constrained")
-    lines = None
-    for idx, name in enumerate([k for k in f.keys() if k != "param_list"]):
-        row, col = divmod(idx, 4)
-        lines = axs[row, col].plot(
-            full_data_log_sensitivity.reshape(
-                full_data_log_sensitivity.shape[0], *full_data.shape[1:]
-            )[indices_full[::-1], idx, :].T,
-            label=variational_params_filtered_aug[indices_full[::-1]],
-        )
-        axs[row, col].set_title(name)
-    fig.legend(
-        lines, variational_params_filtered_aug[indices_full][::-1], loc="outside right"
-    )
+    with h5py.File("simulation-statistics.hdf5", "r+") as f:
+        f["param_list"][sim_idx, :] = param_list[sim_idx, :]
+        f["total_P_DAMPS"][sim_idx, :] = total_P_DAMPS[sim_idx, :]
+        f["total_T1IFN"][sim_idx, :] = total_T1IFN[sim_idx, :]
+        f["total_TNF"][sim_idx, :] = total_TNF[sim_idx, :]
+        f["total_IFNg"][sim_idx, :] = total_IFNg[sim_idx, :]
+        f["total_IL6"][sim_idx, :] = total_IL6[sim_idx, :]
+        f["total_IL1"][sim_idx, :] = total_IL1[sim_idx, :]
+        f["total_IL8"][sim_idx, :] = total_IL8[sim_idx, :]
+        f["total_IL10"][sim_idx, :] = total_IL10[sim_idx, :]
+        f["total_IL12"][sim_idx, :] = total_IL12[sim_idx, :]
+        f["total_IL18"][sim_idx, :] = total_IL18[sim_idx, :]
+        f["total_extracellular_virus"][sim_idx, :] = total_extracellular_virus[
+            sim_idx, :
+        ]
+        f["total_intracellular_virus"][sim_idx, :] = total_intracellular_virus[
+            sim_idx, :
+        ]
+        f["apoptosis_eaten_counter"][sim_idx, :] = apoptosis_eaten_counter[sim_idx, :]
+        f["infected_epis"][sim_idx, :] = infected_epis[sim_idx, :]
+        f["dead_epis"][sim_idx, :] = dead_epis[sim_idx, :]
+        f["apoptosed_epis"][sim_idx, :] = apoptosed_epis[sim_idx, :]
+        f["system_health"][sim_idx, :] = system_health[sim_idx, :]
