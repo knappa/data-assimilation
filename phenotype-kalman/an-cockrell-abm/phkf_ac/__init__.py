@@ -2,8 +2,10 @@ from copy import deepcopy
 from typing import Callable, Final, List, Optional
 
 import numpy as np
+import scipy
 from an_cockrell import AnCockrellModel
 from attrs import Factory, define, field
+from numpy.linalg.linalg import LinAlgError
 from scipy.special import logsumexp
 from scipy.stats import multivariate_normal
 
@@ -15,7 +17,7 @@ from ..consts import (
     variational_params,
 )
 from ..transform import transform_intrinsic_to_kf
-from ..util import model_macro_data
+from ..util import model_macro_data, slogdet
 
 OBSERVABLES = [
     "P_DAMPS",
@@ -65,12 +67,12 @@ class PhenotypeKFAnCockrell:
     phenotype_weight_covs: np.ndarray = field(init=True)
 
     # phenotype distributions
-    phenotype_distribution: np.ndarray = field()
+    log_phenotype_distribution: np.ndarray = field()
 
     # noinspection PyUnresolvedReferences
-    @phenotype_distribution.default
+    @log_phenotype_distribution.default
     def phenotype_distribution_default(self):
-        return np.full(self.num_phenotypes, 1 / self.num_phenotypes, dtype=np.float64)
+        return np.log(np.full(self.num_phenotypes, 1 / self.num_phenotypes, dtype=np.float64))
 
     # in the transformed coordinates
     observation_uncertainty_cov: np.ndarray = field()
@@ -82,6 +84,7 @@ class PhenotypeKFAnCockrell:
 
     # dimensions: (phenotype, model)
     ensemble: List[List[AnCockrellModel]] = Factory(list)
+    ensemble_size: int = field(default=1 + 2 * UNIFIED_STATE_SPACE_DIMENSION)
 
     microstate_save_directory: Optional[str] = field(default=None, converter=normalize_dir_name)
 
@@ -102,7 +105,7 @@ class PhenotypeKFAnCockrell:
             self.num_phenotypes
             == self.phenotype_weight_means.shape[0]
             == self.phenotype_weight_covs.shape[0]
-            == self.phenotype_distribution.shape[0]
+            == self.log_phenotype_distribution.shape[0]
         ), "mismatch in number of phenotypes"
         assert (
             self.phenotype_weight_means.shape[1]
@@ -155,7 +158,7 @@ class PhenotypeKFAnCockrell:
         )
         pass
 
-    def project_to(
+    def project_ensemble_to(
         self, *, t: int = -1, update_ensemble: bool = False, save_microstate_files: bool = True
     ) -> None:
         """
@@ -180,46 +183,12 @@ class PhenotypeKFAnCockrell:
         else:
             models = deepcopy(self.ensemble)
 
-        log_weights = [
-            np.zeros(
-                (len(models[phenotype_idx]), t - self.current_time, self.num_phenotypes),
-                dtype=np.float64,
-            )
-            for phenotype_idx in range(self.num_phenotypes)
-        ]
-
         for time_idx in range(self.current_time + 1, t + 1):
-            time_inclusion_matrix = np.zeros((2017 * 41, 41), dtype=np.float64)
-            time_inclusion_matrix[41 * time_idx : 41 * (time_idx + 1), :] = np.identity(41)
-            restricted_time_pca_matrix = self.pca_matrix @ time_inclusion_matrix
             for phenotype_idx in range(self.num_phenotypes):
                 for model_idx, model in enumerate(models[phenotype_idx]):
                     model.time_step()
-                    self.ensemble_macrostate[phenotype_idx, model_idx, time_idx] = model_macro_data(
-                        model
-                    )
-
-                    # compute the per-timestep weights
-                    pca_reduction = (
-                        restricted_time_pca_matrix
-                        @ self.ensemble_macrostate[phenotype_idx, model_idx, time_idx]
-                    )
-                    for phenotype_test_idx in range(self.num_phenotypes):
-                        difference_vec = (
-                            pca_reduction - self.phenotype_weight_means[phenotype_test_idx, :]
-                        )
-                        log_weights[phenotype_idx][
-                            model_idx, time_idx - self.current_time - 1, phenotype_test_idx
-                        ] = -(
-                            difference_vec.T
-                            @ np.linalg.solve(
-                                self.phenotype_weight_covs[phenotype_test_idx, :, :], difference_vec
-                            )
-                            / 2.0
-                        )
-                    # normalize it:
-                    log_weights[phenotype_idx][model_idx, :] -= logsumexp(
-                        log_weights[phenotype_idx][model_idx, :]
+                    self.ensemble_macrostate[phenotype_idx, model_idx, time_idx, :] = (
+                        model_macro_data(model)
                     )
                     if save_microstate_files:
                         model.save(
@@ -230,30 +199,99 @@ class PhenotypeKFAnCockrell:
                                 else f"phenotype{phenotype_idx}-model{model_idx}-t{time_idx}-projection.hdf5"
                             )
                         )
-                # TODO: update per-phenotype means and covs (we might not be able to do bias correction for cov)
 
     def kf_update(
         self,
         *,
-        t: int,
+        observation_time: int,
         observation_types: List[str],
         measurements: np.ndarray,
         save_microstate_files: bool = False,
     ) -> None:
         """
 
-        :param t: time
+        :param observation_time: time of observation
         :param observation_types: list of measured quantities
         :param measurements: values of measured quantities
         :param save_microstate_files: save projected/updated microstates
-        :return:
+        :return: None
         """
-        # TODO: check the time
         assert len(observation_types) == len(measurements)
         dim_observation = len(observation_types)
+        assert observation_time >= self.current_time, "KF update cannot work backward in time"
+        if observation_time == self.current_time:
+            raise NotImplementedError(
+                "Multiple same-time observations split between different function calls are unsupported"
+            )
 
-        if t > self.current_time:
-            self.project_to(t=t, update_ensemble=True, save_microstate_files=save_microstate_files)
+        delta_time: int = observation_time - self.current_time
+
+        self.project_ensemble_to(
+            t=observation_time,
+            update_ensemble=True,
+            save_microstate_files=save_microstate_files,
+        )
+
+        # ########## Step 1: assemble the predictive distributions from the ensemble macrostates from the previous
+        # observation time to the new observation time
+
+        # Step 1a. Determine weights
+        time_inclusion_matrix = np.zeros((2017 * 41, delta_time * 41), dtype=np.float64)
+        for time_idx in range(self.current_time, observation_time + 1):
+            time_inclusion_matrix[
+                41 * (self.current_time + time_idx) : 41 * (self.current_time + time_idx + 1),
+                41 * time_idx : 41 * (time_idx + 1),
+            ] = np.identity(41)
+        restricted_time_pca_matrix = self.pca_matrix @ time_inclusion_matrix
+        reduced_states = np.einsum(
+            "ij,pmj->pmi",
+            restricted_time_pca_matrix,  # [3,41*dt]
+            self.ensemble_macrostate.reshape(
+                (self.num_phenotypes, self.ensemble_size, -1)
+            ),  # [p,m,t,s] -> [p,m,j]
+        )
+        log_weights = np.zeros(
+            (self.num_phenotypes, self.ensemble_size),
+            dtype=np.float64,
+        )
+        for phenotype_idx in range(self.num_phenotypes):
+            mean_difference_vec = reduced_states - self.phenotype_weight_means[phenotype_idx]
+            try:
+                temp = np.linalg.lstsq(
+                    self.phenotype_weight_covs[phenotype_idx],
+                    mean_difference_vec,
+                )[0]
+            except LinAlgError:
+                temp = scipy.linalg.pinvh(
+                    self.phenotype_weight_covs[phenotype_idx], return_rank=False
+                ) @ mean_difference_vec
+            log_weights[phenotype_idx, :] = (
+                -(
+                    mean_difference_vec @ temp
+                    + slogdet(self.phenotype_weight_covs[phenotype_idx])[1]
+                )
+                / 2.0
+            )
+        # normalize weights
+        for ensemble_idx in range(log_weights.shape[1]):
+            log_weights[:, ensemble_idx] -= logsumexp(log_weights[:, ensemble_idx])
+
+        # compute weighted per-phenotype and per-time mean and covariance
+        for phenotype_idx in range(self.num_phenotypes):
+            weights = np.exp(log_weights[phenotype_idx, :])
+            self.ensemble_macrostate_mean[phenotype_idx, :, :] = np.average(
+                self.ensemble_macrostate[phenotype_idx, :, :, :], weights=weights, axis=0
+            )
+            for time_idx in range(self.current_time + 1, observation_time + 1):
+                self.ensemble_macrostate_cov[phenotype_idx, time_idx, :, :] = np.cov(
+                    self.ensemble_macrostate[phenotype_idx, :, time_idx, :],
+                    aweights=weights,
+                    rowvar=False,
+                )
+
+        # ######### Step 2: perform the Kalman update from the observation, per phenotype
+
+        # Step 2a. Compute some generally useful stuff
 
         # assemble the matrix for the observation model
         H = np.zeros((dim_observation, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
@@ -265,33 +303,53 @@ class PhenotypeKFAnCockrell:
 
         observation = transform_intrinsic_to_kf(measurements)
 
-        v = observation - (H @ self.ensemble_macrostate_mean[t, :])
-        S = H @ self.ensemble_macrostate_cov[t, :, :] @ H.T + R
-        K = self.ensemble_macrostate_cov[t, :, :] @ H.T @ np.linalg.pinv(S)
+        ident_matrix = np.identity(UNIFIED_STATE_SPACE_DIMENSION)
 
-        self.ensemble_macrostate_mean[t, :] += K @ v
-        # Joseph form update (See e.g. https://www.anuncommonlab.com/articles/how-kalman-filters-work/part2.html)
-        A = np.identity(self.ensemble_macrostate_cov.shape[-1]) - K @ H
-        self.ensemble_macrostate_cov[t, :, :] = np.nan_to_num(
-            A @ self.ensemble_macrostate_cov[t, :, :] @ A.T + K @ R @ K.T
-        )
+        # Step 2b. Kalman update for each phenotype
 
-        # some numerical belt-and-suspenders
-        self.ensemble_macrostate_cov[t, :, :] = np.nan_to_num(
-            (self.ensemble_macrostate_cov[t, :, :] + self.ensemble_macrostate_cov[t, :, :].T) / 2.0
-        )
-        min_diag = np.min(np.diag(self.ensemble_macrostate_cov[t, :, :]))
-        if min_diag <= 0.0:
-            self.ensemble_macrostate_cov[t, :, :] += (1e-6 - min_diag) * np.identity(
-                self.ensemble_macrostate_cov.shape[-1]
+        for phenotype_idx in range(self.num_phenotypes):
+            mu = self.ensemble_macrostate_mean[phenotype_idx, observation_time, :]
+            P = self.ensemble_macrostate_cov[phenotype_idx, observation_time, :, :]
+
+            v = observation - (H @ mu)
+            S = H @ P @ H.T + R
+
+            self.log_phenotype_distribution[phenotype_idx] += (
+                -(v.T @ scipy.linalg.pinvh(S) @ v - slogdet(S)[1]) / 2
             )
 
-        # TODO: microstate updates
+            K = P @ H.T @ np.linalg.pinv(S)
+
+            # Note for future readers: mu[:] and P[:,:] access the the contents of the original arrays that mu and P
+            # are derived from. If you replaced this with mu and P, you'd just get new arrays and the originals would
+            # be unchanged.
+            mu[:] += K @ v
+            # Joseph form update (See e.g. https://www.anuncommonlab.com/articles/how-kalman-filters-work/part2.html)
+            A = ident_matrix - K @ H
+            P[:, :] = np.nan_to_num(A @ P @ A.T + K @ R @ K.T)
+
+            # Make sure that the covariance matrix is on-the-nose symmetric
+            P[:, :] = np.nan_to_num((P + P.T) / 2.0)
+            # Make sure that the covariance matrix is positive definite
+            min_diag = np.min(np.diag(P))
+            if min_diag <= 1e-6:
+                P[:, :] += (1e-6 - min_diag) * ident_matrix
+
+        # Step 2c: Normalize overall phenotype probabilities
+        self.log_phenotype_distribution -= logsumexp(self.log_phenotype_distribution)
+
+        # ######### Step 3: As in the unscented kalman filter, find the + of the new Gaussian's and best matching to
+        # the ensemble members
+
+        # ######### Step 4: Microstate synthesis
+
         # TODO: optionally save microstate update
+
+        # ######### Step 5: Cleanup
 
         # update counters
         # previous_time = self.current_time
-        self.current_time = t
+        self.current_time = observation_time
         self.kf_iteration += 1
 
 
