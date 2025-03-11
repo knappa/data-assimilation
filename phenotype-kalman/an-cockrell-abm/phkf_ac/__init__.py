@@ -14,10 +14,12 @@ from ..consts import (
     default_params,
     init_only_params,
     state_var_indices,
+    state_vars,
     variational_params,
 )
-from ..transform import transform_intrinsic_to_kf
-from ..util import model_macro_data, slogdet
+from ..modify_epi_spatial import modify_model
+from ..transform import transform_intrinsic_to_kf, transform_kf_to_intrinsic
+from ..util import gale_shapely_matching, model_macro_data, slogdet
 
 OBSERVABLES = [
     "P_DAMPS",
@@ -209,6 +211,7 @@ class PhenotypeKFAnCockrell:
         save_microstate_files: bool = False,
     ) -> None:
         """
+        Perform the KF update to the ensemble.
 
         :param observation_time: time of observation
         :param observation_types: list of measured quantities
@@ -254,6 +257,7 @@ class PhenotypeKFAnCockrell:
             (self.num_phenotypes, self.ensemble_size),
             dtype=np.float64,
         )
+        # TODO: unscented weights?
         for phenotype_idx in range(self.num_phenotypes):
             mean_difference_vec = reduced_states - self.phenotype_weight_means[phenotype_idx]
             try:
@@ -262,9 +266,10 @@ class PhenotypeKFAnCockrell:
                     mean_difference_vec,
                 )[0]
             except LinAlgError:
-                temp = scipy.linalg.pinvh(
-                    self.phenotype_weight_covs[phenotype_idx], return_rank=False
-                ) @ mean_difference_vec
+                temp = (
+                    scipy.linalg.pinvh(self.phenotype_weight_covs[phenotype_idx], return_rank=False)
+                    @ mean_difference_vec
+                )
             log_weights[phenotype_idx, :] = (
                 -(
                     mean_difference_vec @ temp
@@ -341,7 +346,53 @@ class PhenotypeKFAnCockrell:
         # ######### Step 3: As in the unscented kalman filter, find the + of the new Gaussian's and best matching to
         # the ensemble members
 
+        ensemble_target_locs = np.zeros(
+            (
+                self.num_phenotypes,
+                2 * UNIFIED_STATE_SPACE_DIMENSION + 1,
+                UNIFIED_STATE_SPACE_DIMENSION,
+            ),
+            dtype=np.float64,
+        )
+        model_to_sample_pairing = np.zeros(
+            (self.num_phenotypes, 2 * UNIFIED_STATE_SPACE_DIMENSION + 1), dtype=np.intp
+        )
+        for phenotype_idx in range(self.num_phenotypes):
+            ensemble_target_locs[phenotype_idx, 0, :] = self.ensemble_macrostate_mean[
+                phenotype_idx, observation_time
+            ]
+            U, S, Vh = np.linalg.svd(
+                self.ensemble_macrostate_cov[phenotype_idx, observation_time, :, :],
+                hermitian=True,
+                compute_uv=True,
+                full_matrices=True,
+            )
+            principal_axes = U * np.sqrt(S)  # TODO: proper weights
+            for axis_idx, axis in enumerate(principal_axes):
+                ensemble_target_locs[phenotype_idx, 2 * axis + 1, :] = axis
+                ensemble_target_locs[phenotype_idx, 2 * axis + 2, :] = -axis
+
+            model_to_sample_pairing[phenotype_idx, :] = gale_shapely_matching(
+                new_sample=ensemble_target_locs[phenotype_idx],
+                macro_data=self.ensemble_macrostate[phenotype_idx, observation_time],
+            )
+
         # ######### Step 4: Microstate synthesis
+
+        for phenotype_idx in range(self.num_phenotypes):
+            for model_idx in range(2 * UNIFIED_STATE_SPACE_DIMENSION + 1):
+                modify_model(
+                    self.ensemble[phenotype_idx][model_idx],
+                    transform_kf_to_intrinsic(
+                        ensemble_target_locs[
+                            phenotype_idx, model_to_sample_pairing[phenotype_idx, model_idx], :
+                        ]
+                    ),
+                    verbose=True,  # TODO: remember to revisit
+                    state_var_indices=state_var_indices,
+                    state_vars=state_vars,
+                    variational_params=variational_params,
+                )
 
         # TODO: optionally save microstate update
 
