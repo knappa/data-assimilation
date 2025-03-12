@@ -13,7 +13,7 @@ from scipy.stats import multivariate_normal
 from sklearn.covariance import LedoitWolf
 from tqdm.auto import tqdm
 
-from consts import (
+from phkf_ac.consts import (
     UNIFIED_STATE_SPACE_DIMENSION,
     default_params,
     init_only_params,
@@ -21,8 +21,8 @@ from consts import (
     state_vars,
     variational_params,
 )
-from transform import transform_intrinsic_to_kf, transform_kf_to_intrinsic
-from util import fix_title, gale_shapely_matching, model_macro_data, slogdet
+from phkf_ac.transform import transform_intrinsic_to_kf, transform_kf_to_intrinsic
+from phkf_ac.util import fix_title, gale_shapely_matching, model_macro_data, slogdet
 
 ################################################################################
 
@@ -136,11 +136,11 @@ modification_algorithm: Final[str] = (
 )
 
 if modification_algorithm == "full-spatial":
-    from modify_full_spatial import modify_model
+    from phkf_ac.modify_full_spatial import modify_model
 elif modification_algorithm == "spatial":
-    from modify_epi_spatial import modify_model
+    from phkf_ac.modify_epi_spatial import modify_model
 else:
-    from modify_simple import modify_model
+    from phkf_ac.modify_simple import modify_model
 
 # rs encodes the uncertainty in the various observations. Defaults are 1.0 if
 # not set via the command line. (See above for defaults if you are. Right now,

@@ -173,9 +173,7 @@ def dither(
             ]
 
             # find the new type
-            cell_type: EpiType = quantizer(
-                model, state_vecs, available_epitypes, row_idx, col_idx
-            )
+            cell_type: EpiType = quantizer(model, state_vecs, available_epitypes, row_idx, col_idx)
 
             # update counts
             newly_set_epi_counts[cell_type] += 1
@@ -391,11 +389,9 @@ def modify_model(
     # sanity check on updated epithelium TODO: other checks
     for epitype in EpiType:
         if epitype == EpiType.Infected:
-            model.epi_intracellular_virus[model.epithelium == EpiType.Infected] = (
-                np.maximum(
-                    1,
-                    model.epi_intracellular_virus[model.epithelium == EpiType.Infected],
-                )
+            model.epi_intracellular_virus[model.epithelium == EpiType.Infected] = np.maximum(
+                1,
+                model.epi_intracellular_virus[model.epithelium == EpiType.Infected],
             )
         else:
             model.epi_intracellular_virus[model.epithelium == epitype] = 0
@@ -412,19 +408,15 @@ def modify_model(
             * (desired_total_intracellular_virus / model.total_intracellular_virus),
         ).astype(int)
         # ensure that there is at least one virus in each infected cell
-        model.epi_intracellular_virus[model.epithelium == EpiType.Infected] = (
-            np.maximum(
-                1, model.epi_intracellular_virus[model.epithelium == EpiType.Infected]
-            )
+        model.epi_intracellular_virus[model.epithelium == EpiType.Infected] = np.maximum(
+            1, model.epi_intracellular_virus[model.epithelium == EpiType.Infected]
         )
 
     model.apoptosis_eaten_counter = int(
         np.rint(desired_state[state_var_indices["apoptosis_eaten_counter"]])
     )  # no internal state here
 
-    dc_delta = int(
-        np.rint(desired_state[state_var_indices["dc_count"]] - model.dc_count)
-    )
+    dc_delta = int(np.rint(desired_state[state_var_indices["dc_count"]] - model.dc_count))
     if dc_delta > 0:
         for _ in range(dc_delta):
             model.create_dc()
@@ -437,9 +429,7 @@ def modify_model(
         model.num_dcs -= num_to_kill
         assert model.num_dcs == np.sum(model.dc_mask)
 
-    nk_delta = int(
-        np.rint(desired_state[state_var_indices["nk_count"]] - model.nk_count)
-    )
+    nk_delta = int(np.rint(desired_state[state_var_indices["nk_count"]] - model.nk_count))
     if nk_delta > 0:
         model.create_nk(number=int(nk_delta))
     elif nk_delta < 0:
@@ -451,24 +441,16 @@ def modify_model(
         model.num_nks -= num_to_kill
         assert model.num_nks == np.sum(model.nk_mask)
 
-    pmn_delta = int(
-        np.rint(desired_state[state_var_indices["pmn_count"]] - model.pmn_count)
-    )
+    pmn_delta = int(np.rint(desired_state[state_var_indices["pmn_count"]] - model.pmn_count))
     if pmn_delta > 0:
         # need more pmns
         # adapted from activated_endo_update
         pmn_spawn_list = list(
             zip(
                 *np.where(
-                    (
-                        model.endothelial_adhesion_counter
-                        > model.activated_endo_adhesion_threshold
-                    )
+                    (model.endothelial_adhesion_counter > model.activated_endo_adhesion_threshold)
                     & (model.endothelial_activation == EndoType.Activated)
-                    & (
-                        rng.random(size=model.geometry)
-                        < model.activated_endo_pmn_spawn_prob
-                    )
+                    & (rng.random(size=model.geometry) < model.activated_endo_pmn_spawn_prob)
                 )
             )
         )
@@ -491,9 +473,7 @@ def modify_model(
         model.num_pmns -= num_to_kill
         assert model.num_pmns == np.sum(model.pmn_mask)
 
-    macro_delta = int(
-        np.rint(desired_state[state_var_indices["macro_count"]] - model.macro_count)
-    )
+    macro_delta = int(np.rint(desired_state[state_var_indices["macro_count"]] - model.macro_count))
     if macro_delta > 0:
         # need more macrophages, create them as in init in random locations
         for _ in range(macro_delta):

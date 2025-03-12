@@ -131,10 +131,7 @@ def modify_model(
         ).astype(int)
     # if the update clears out all virus in an infected cell, it should be healthy
     model.epithelium[
-        np.where(
-            (model.epithelium == EpiType.Infected)
-            & (model.epi_intracellular_virus <= 0)
-        )
+        np.where((model.epithelium == EpiType.Infected) & (model.epi_intracellular_virus <= 0))
     ] = EpiType.Healthy
 
     model.apoptosis_eaten_counter = int(
@@ -189,9 +186,9 @@ def modify_model(
             model.dead_epithelium_count - desired_dead_epithelium,
             replace=False,
         )
-        model.epithelium[
-            dead_locations[0][locs_to_empty], dead_locations[1][locs_to_empty]
-        ] = EpiType.Empty
+        model.epithelium[dead_locations[0][locs_to_empty], dead_locations[1][locs_to_empty]] = (
+            EpiType.Empty
+        )
         model.epi_intracellular_virus[
             dead_locations[0][locs_to_empty], dead_locations[1][locs_to_empty]
         ] = 0
@@ -223,9 +220,9 @@ def modify_model(
             desired_healthy_epithelium - model.healthy_epithelium_count,
             replace=False,
         )
-        model.epithelium[
-            empty_locations[0][healthy_locs], empty_locations[1][healthy_locs]
-        ] = EpiType.Healthy
+        model.epithelium[empty_locations[0][healthy_locs], empty_locations[1][healthy_locs]] = (
+            EpiType.Healthy
+        )
         model.epi_intracellular_virus[
             empty_locations[0][healthy_locs], empty_locations[1][healthy_locs]
         ] = 0
@@ -237,9 +234,9 @@ def modify_model(
             desired_infected_epithelium - model.infected_epithelium_count,
             replace=False,
         )
-        model.epithelium[
-            empty_locations[0][locs_to_infect], empty_locations[1][locs_to_infect]
-        ] = EpiType.Infected
+        model.epithelium[empty_locations[0][locs_to_infect], empty_locations[1][locs_to_infect]] = (
+            EpiType.Infected
+        )
         model.epi_intracellular_virus[
             empty_locations[0][locs_to_infect], empty_locations[1][locs_to_infect]
         ] = 1
@@ -268,16 +265,14 @@ def modify_model(
             desired_apoptosed_epithelium - model.apoptosed_epithelium_count,
             replace=False,
         )
-        model.epithelium[
-            empty_locations[0][apoptosed_locs], empty_locations[1][apoptosed_locs]
-        ] = EpiType.Apoptosed
+        model.epithelium[empty_locations[0][apoptosed_locs], empty_locations[1][apoptosed_locs]] = (
+            EpiType.Apoptosed
+        )
         model.epi_intracellular_virus[
             empty_locations[0][apoptosed_locs], empty_locations[1][apoptosed_locs]
         ] = 0
 
-    dc_delta = int(
-        np.rint(desired_state[state_var_indices["dc_count"]] - model.dc_count)
-    )
+    dc_delta = int(np.rint(desired_state[state_var_indices["dc_count"]] - model.dc_count))
     if dc_delta > 0:
         for _ in range(dc_delta):
             model.create_dc()
@@ -290,9 +285,7 @@ def modify_model(
         model.num_dcs -= num_to_kill
         assert model.num_dcs == np.sum(model.dc_mask)
 
-    nk_delta = int(
-        np.rint(desired_state[state_var_indices["nk_count"]] - model.nk_count)
-    )
+    nk_delta = int(np.rint(desired_state[state_var_indices["nk_count"]] - model.nk_count))
     if nk_delta > 0:
         model.create_nk(number=int(nk_delta))
     elif nk_delta < 0:
@@ -304,24 +297,16 @@ def modify_model(
         model.num_nks -= num_to_kill
         assert model.num_nks == np.sum(model.nk_mask)
 
-    pmn_delta = int(
-        np.rint(desired_state[state_var_indices["pmn_count"]] - model.pmn_count)
-    )
+    pmn_delta = int(np.rint(desired_state[state_var_indices["pmn_count"]] - model.pmn_count))
     if pmn_delta > 0:
         # need more pmns
         # adapted from activated_endo_update
         pmn_spawn_list = list(
             zip(
                 *np.where(
-                    (
-                        model.endothelial_adhesion_counter
-                        > model.activated_endo_adhesion_threshold
-                    )
+                    (model.endothelial_adhesion_counter > model.activated_endo_adhesion_threshold)
                     & (model.endothelial_activation == EndoType.Activated)
-                    & (
-                        np.random.rand(*model.geometry)
-                        < model.activated_endo_pmn_spawn_prob
-                    )
+                    & (np.random.rand(*model.geometry) < model.activated_endo_pmn_spawn_prob)
                 )
             )
         )
@@ -344,9 +329,7 @@ def modify_model(
         model.num_pmns -= num_to_kill
         assert model.num_pmns == np.sum(model.pmn_mask)
 
-    macro_delta = int(
-        np.rint(desired_state[state_var_indices["macro_count"]] - model.macro_count)
-    )
+    macro_delta = int(np.rint(desired_state[state_var_indices["macro_count"]] - model.macro_count))
     if macro_delta > 0:
         # need more macrophages, create them as in init in random locations
         for _ in range(macro_delta):

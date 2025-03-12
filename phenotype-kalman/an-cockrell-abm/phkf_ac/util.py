@@ -30,9 +30,7 @@ cmap = colors.ListedColormap(
 ################################################################################
 
 
-def compute_desired_epi_counts(
-    desired_state, model: AnCockrellModel, state_var_indices
-):
+def compute_desired_epi_counts(desired_state, model: AnCockrellModel, state_var_indices):
     num_grid_spaces = model.GRID_WIDTH * model.GRID_HEIGHT
 
     # lots of cleanup here, to catch corner cases
@@ -141,9 +139,7 @@ def cov_cleanup(cov_mat: np.ndarray) -> np.ndarray:
 ################################################################################
 
 
-def gale_shapely_matching(
-    *, new_sample: np.ndarray, macro_data: np.ndarray
-) -> np.ndarray:
+def gale_shapely_matching(*, new_sample: np.ndarray, macro_data: np.ndarray) -> np.ndarray:
     """
     Compute a pairing of distribution samples to existing macroscale data that minimizes the pairwise distance using
     the Gale-Shapely algorithm. (i.e. stable marriage)
@@ -194,16 +190,13 @@ def gale_shapely_matching(
                 else:
                     # compare preferences
                     established_pair_dist = np.linalg.norm(
-                        macro_data[competitor_model_idx, :]
-                        - new_sample[possible_sample_pair, :]
+                        macro_data[competitor_model_idx, :] - new_sample[possible_sample_pair, :]
                     )
                     proposed_pair_dist = np.linalg.norm(
                         macro_data[model_idx, :] - new_sample[possible_sample_pair, :]
                     )
                     if proposed_pair_dist < established_pair_dist:
-                        model_to_sample_pairing[competitor_model_idx] = (
-                            -1
-                        )  # free the competitor
+                        model_to_sample_pairing[competitor_model_idx] = -1  # free the competitor
                         all_paired = False
                         # make new pair
                         sample_to_model_pairing[possible_sample_pair] = model_idx

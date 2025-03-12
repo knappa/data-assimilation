@@ -16,7 +16,7 @@ from consts import (
     state_vars,
     variational_params,
 )
-from modify_epi_spatial import modify_model
+from modify_full_spatial import modify_model
 from util import model_macro_data
 
 ################################################################################
@@ -93,18 +93,14 @@ SAMPLE_INTERVAL = 48  # how often to make measurements
 ENSEMBLE_SIZE = (
     (UNIFIED_STATE_SPACE_DIMENSION + 1) * UNIFIED_STATE_SPACE_DIMENSION // 2
 )  # max(50, (UNIFIED_STATE_SPACE_DIMENSION + 1))
-OBSERVABLES = (
-    ["extracellular_virus"] if not hasattr(args, "measurements") else args.measurements
-)
+OBSERVABLES = ["extracellular_virus"] if not hasattr(args, "measurements") else args.measurements
 OBSERVABLE_VAR_NAMES = ["total_" + name for name in OBSERVABLES]
 
 RESAMPLE_MODELS = False
 
 # if we are altering the models (as opposed to resampling) try to match the
 # models to minimize the changes necessary.
-MODEL_MATCHMAKER = (
-    True if not hasattr(args, "matchmaker") else (args.matchmaker == "yes")
-)
+MODEL_MATCHMAKER = True if not hasattr(args, "matchmaker") else (args.matchmaker == "yes")
 
 # have the models' parameters do a random walk over time (should help
 # with covariance starvation)
@@ -123,10 +119,7 @@ init_mean_vec = np.array(
 
 init_cov_matrix = np.diag(
     np.array(
-        [
-            0.75 * np.sqrt(default_params[param])
-            for param in (init_only_params + variational_params)
-        ]
+        [0.75 * np.sqrt(default_params[param]) for param in (init_only_params + variational_params)]
     )
 )
 
@@ -135,17 +128,13 @@ init_cov_matrix = np.diag(
 
 # sampled virtual patient parameters
 init_params = default_params.copy()
-init_param_sample = np.abs(
-    multivariate_normal(mean=init_mean_vec, cov=init_cov_matrix).rvs()
-)
+init_param_sample = np.abs(multivariate_normal(mean=init_mean_vec, cov=init_cov_matrix).rvs())
 for sample_component, param_name in zip(
     init_param_sample,
     (init_only_params + variational_params),
 ):
     init_params[param_name] = (
-        round(sample_component)
-        if isinstance(default_params[param_name], int)
-        else sample_component
+        round(sample_component) if isinstance(default_params[param_name], int) else sample_component
     )
 
 # create model
@@ -184,27 +173,27 @@ new_macro_state = macro_state.copy()
 new_macro_state[state_var_indices["healthy_epithelium_count"]] += 300
 new_macro_state[state_var_indices["infected_epithelium_count"]] -= 300
 
-from modify_epi_spatial import dither, quantizer
+from modify_full_spatial import dither
+
+new_epi_counts = new_macro_state[
+    [
+        state_var_indices["empty_epithelium_count"],
+        state_var_indices["healthy_epithelium_count"],
+        state_var_indices["infected_epithelium_count"],
+        state_var_indices["dead_epithelium_count"],
+        state_var_indices["apoptosed_epithelium_count"],
+    ]
+]
 
 updated_epithelium = dither(
     model,
-    new_macro_state[
-        [
-            state_var_indices["empty_epithelium_count"],
-            state_var_indices["healthy_epithelium_count"],
-            state_var_indices["infected_epithelium_count"],
-            state_var_indices["dead_epithelium_count"],
-            state_var_indices["apoptosed_epithelium_count"],
-        ]
-    ],
+    new_epi_counts,
 )
 
 fig, axs = plt.subplots(3)
 axs[0].imshow(model.epithelium.astype(int), vmin=0, vmax=4)
 axs[1].imshow(updated_epithelium.astype(int), vmin=0, vmax=4)
-axs[2].imshow(
-    model.epithelium.astype(int) - updated_epithelium.astype(int), vmin=-4, vmax=4
-)
+axs[2].imshow(model.epithelium.astype(int) - updated_epithelium.astype(int), vmin=-4, vmax=4)
 
 print(
     "number of changed epis",

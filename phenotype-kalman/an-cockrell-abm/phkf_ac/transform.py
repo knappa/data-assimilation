@@ -159,9 +159,7 @@ import numpy as np
 __EPSILON__ = 1e-3
 
 
-def transform_intrinsic_to_kf(
-    macrostate_intrinsic: np.ndarray, *, index=-1
-) -> np.ndarray:
+def transform_intrinsic_to_kf(macrostate_intrinsic: np.ndarray, *, index=-1) -> np.ndarray:
     """
     Transform an intrinsic macrostate to a normalized one for the KF.
 

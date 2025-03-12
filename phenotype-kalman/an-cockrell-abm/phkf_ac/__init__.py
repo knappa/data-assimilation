@@ -10,7 +10,7 @@ from numpy.linalg.linalg import LinAlgError
 from scipy.special import logsumexp
 from scipy.stats import multivariate_normal
 
-from ..consts import (
+from consts import (
     UNIFIED_STATE_SPACE_DIMENSION,
     default_params,
     init_only_params,
@@ -18,9 +18,9 @@ from ..consts import (
     state_vars,
     variational_params,
 )
-from ..modify_epi_spatial import modify_model
-from ..transform import transform_intrinsic_to_kf, transform_kf_to_intrinsic
-from ..util import gale_shapely_matching, model_macro_data, slogdet
+from modify_epi_spatial import modify_model
+from transform import transform_intrinsic_to_kf, transform_kf_to_intrinsic
+from util import gale_shapely_matching, model_macro_data, slogdet
 
 OBSERVABLES = [
     "P_DAMPS",

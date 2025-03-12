@@ -131,9 +131,7 @@ def quantization_maker(
                     second_block_start_idx:third_block_start_idx,
                 ]
                 + quantized_state[third_block_start_idx:].T
-                @ cov_mat_inv[
-                    third_block_start_idx:, second_block_start_idx:third_block_start_idx
-                ]
+                @ cov_mat_inv[third_block_start_idx:, second_block_start_idx:third_block_start_idx]
             )
             # TODO: explore options (specifically solver options and tolerance)
             # noinspection PyTypeChecker
@@ -168,11 +166,7 @@ def quantization_maker(
 
             # prefer to be close to the natural quantization
             quantized_neg_log_likelihood = quantization_similarity_loss_weight * np.sum(
-                (
-                    quantized_state[:third_block_start_idx]
-                    - sample[:third_block_start_idx]
-                )
-                ** 2
+                (quantized_state[:third_block_start_idx] - sample[:third_block_start_idx]) ** 2
             )
             # prefer to be a typical local neighborhood
             quantized_neg_log_likelihood += (
@@ -240,9 +234,7 @@ def dither(
 
     newly_set_epi_counts = np.zeros(len(EpiType), dtype=np.int64)
 
-    for row_idx, col_idx in itertools.product(
-        range(model.geometry[0]), range(model.geometry[1])
-    ):
+    for row_idx, col_idx in itertools.product(range(model.geometry[0]), range(model.geometry[1])):
         # compute which epitypes are available for placement, where available means that we have not yet used
         # up all requested instances.
         available_epitypes = [
@@ -433,9 +425,7 @@ def rescale_spatial_variables(desired_state, model, state_var_indices):
 
 
 def update_macrophage_count(desired_state, model, state_var_indices):
-    macro_delta = int(
-        np.rint(desired_state[state_var_indices["macro_count"]] - model.macro_count)
-    )
+    macro_delta = int(np.rint(desired_state[state_var_indices["macro_count"]] - model.macro_count))
     if macro_delta > 0:
         # need more macrophages, create them as in init in random locations
         for _ in range(macro_delta):
@@ -463,24 +453,16 @@ def update_macrophage_count(desired_state, model, state_var_indices):
 
 
 def update_pmn_count(desired_state, model, state_var_indices, verbose):
-    pmn_delta = int(
-        np.rint(desired_state[state_var_indices["pmn_count"]] - model.pmn_count)
-    )
+    pmn_delta = int(np.rint(desired_state[state_var_indices["pmn_count"]] - model.pmn_count))
     if pmn_delta > 0:
         # need more pmns
         # adapted from activated_endo_update
         pmn_spawn_list = list(
             zip(
                 *np.where(
-                    (
-                        model.endothelial_adhesion_counter
-                        > model.activated_endo_adhesion_threshold
-                    )
+                    (model.endothelial_adhesion_counter > model.activated_endo_adhesion_threshold)
                     & (model.endothelial_activation == EndoType.Activated)
-                    & (
-                        np.random.rand(*model.geometry)
-                        < model.activated_endo_pmn_spawn_prob
-                    )
+                    & (np.random.rand(*model.geometry) < model.activated_endo_pmn_spawn_prob)
                 )
             )
         )
@@ -508,9 +490,7 @@ def update_pmn_count(desired_state, model, state_var_indices, verbose):
 
 
 def update_nk_count(desired_state, model, state_var_indices):
-    nk_delta = int(
-        np.rint(desired_state[state_var_indices["nk_count"]] - model.nk_count)
-    )
+    nk_delta = int(np.rint(desired_state[state_var_indices["nk_count"]] - model.nk_count))
     if nk_delta > 0:
         model.create_nk(number=int(nk_delta))
     elif nk_delta < 0:
@@ -527,9 +507,7 @@ def update_nk_count(desired_state, model, state_var_indices):
 
 
 def update_dc_count(desired_state, model, state_var_indices):
-    dc_delta = int(
-        np.rint(desired_state[state_var_indices["dc_count"]] - model.dc_count)
-    )
+    dc_delta = int(np.rint(desired_state[state_var_indices["dc_count"]] - model.dc_count))
     if dc_delta > 0:
         for _ in range(dc_delta):
             model.create_dc()
@@ -604,11 +582,9 @@ def modify_model(
     # sanity check on updated epithelium TODO: other checks
     for epitype in EpiType:
         if epitype == EpiType.Infected:
-            model.epi_intracellular_virus[model.epithelium == EpiType.Infected] = (
-                np.maximum(
-                    1,
-                    model.epi_intracellular_virus[model.epithelium == EpiType.Infected],
-                )
+            model.epi_intracellular_virus[model.epithelium == EpiType.Infected] = np.maximum(
+                1,
+                model.epi_intracellular_virus[model.epithelium == EpiType.Infected],
             )
         else:
             model.epi_intracellular_virus[model.epithelium == epitype] = 0
@@ -624,10 +600,8 @@ def modify_model(
             * (desired_total_intracellular_virus / model.total_intracellular_virus),
         ).astype(int)
         # ensure that there is at least one virus in each infected cell
-        model.epi_intracellular_virus[model.epithelium == EpiType.Infected] = (
-            np.maximum(
-                1, model.epi_intracellular_virus[model.epithelium == EpiType.Infected]
-            )
+        model.epi_intracellular_virus[model.epithelium == EpiType.Infected] = np.maximum(
+            1, model.epi_intracellular_virus[model.epithelium == EpiType.Infected]
         )
 
     model.apoptosis_eaten_counter = int(
