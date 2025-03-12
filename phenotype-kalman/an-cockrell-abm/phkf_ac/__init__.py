@@ -1,3 +1,4 @@
+import itertools
 from copy import deepcopy
 from typing import Callable, Final, List, Optional
 
@@ -126,7 +127,9 @@ class PhenotypeKFAnCockrell:
 
         # TODO: if the per_phenotype_means/covs is only for 1 phenotype, expand it to all N equally
 
-    def initialize_ensemble(self, *, initialization_means, initialization_covs, t: int = 0) -> None:
+    def initialize_ensemble(
+        self, *, initialization_means: np.ndarray, initialization_covs: np.ndarray, t: int = 0
+    ) -> None:
         """
         Initialize the ensemble. Note that the initialization parameters are, while related, not the same as the state
         parameters.
@@ -136,9 +139,6 @@ class PhenotypeKFAnCockrell:
         :param t: initial time (default 0)
         :return:
         """
-        # TODO: initialization uses different parameters than the running state (Ugh) what to do here?
-        #  as function params?
-
         self.ensemble_macrostate = np.zeros(
             (
                 self.num_phenotypes,
@@ -158,7 +158,19 @@ class PhenotypeKFAnCockrell:
                 UNIFIED_STATE_SPACE_DIMENSION,
             )
         )
-        pass
+
+        # TODO: consider per-phenotype initialization (Note that these aren't quite the same parameters, so this can't
+        #  just be read from the existing data.)
+        self.ensemble = [model_sigma_point_ensemble_from(initialization_means, initialization_covs)]
+
+        for phenotype_idx, model_idx in itertools.product(
+            range(self.num_phenotypes), 2 * UNIFIED_STATE_SPACE_DIMENSION + 1
+        ):
+            self.ensemble_macrostate[phenotype_idx, model_idx, 0, :] = model_macro_data(
+                self.ensemble[phenotype_idx][model_idx]
+            )
+
+        self.current_time = t
 
     def project_ensemble_to(
         self, *, t: int = -1, update_ensemble: bool = False, save_microstate_files: bool = True
@@ -435,6 +447,54 @@ def model_ensemble_from(means, covariances, ensemble_size):
         # create model for virtual patient
         model = AnCockrellModel(**model_param_dict)
         mdl_ensemble.append(model)
+
+    return mdl_ensemble
+
+
+####################################################################################################
+
+# TODO: consider log-normal distribution for initial parameters
+
+
+def model_sigma_point_ensemble_from_helper(params: np.ndarray):
+    model_param_dict = default_params.copy()
+    for sample_component, parameter_name in zip(
+        params,
+        (init_only_params + variational_params),
+    ):
+        model_param_dict[parameter_name] = (
+            round(max(0, sample_component))
+            if isinstance(default_params[parameter_name], int)
+            else max(0.0, sample_component)
+        )
+    # create model for virtual patient
+    model = AnCockrellModel(**model_param_dict)
+    return model
+
+
+def model_sigma_point_ensemble_from(means: np.ndarray, covariances: np.ndarray):
+    """
+    Create an ensemble of models from a distribution. Uses init-only
+    and variational parameters
+
+    :param means:
+    :param covariances:
+    :return:
+    """
+    # make 100% sure of the covariance matrix
+    covariances = (covariances + covariances.T) / 2
+    min_diag = np.min(np.diag(covariances))
+    if min_diag < 1e-6:
+        covariances += (1e-6 - min_diag) * np.identity(covariances.shape[0])
+
+    # get principal axes
+    U, S, Vh = np.linalg.svd(covariances, full_matrices=True, compute_uv=True, hermitian=True)
+    axes = U * np.sqrt(S)
+
+    mdl_ensemble = [model_sigma_point_ensemble_from_helper(means)]
+    for axis in axes:
+        mdl_ensemble.append(model_sigma_point_ensemble_from_helper(means + axis))
+        mdl_ensemble.append(model_sigma_point_ensemble_from_helper(means - axis))
 
     return mdl_ensemble
 
