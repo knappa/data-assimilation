@@ -151,7 +151,7 @@ import numpy as np
 # 36    "macro_activation_threshold"
 # 37    "activated_macro_tnf_secretion"
 # 38    "inflammasome_il1_secretion"
-# 30    "inflammasome_macro_pre_il1_secretion"
+# 39    "inflammasome_macro_pre_il1_secretion"
 
 
 # use a slight shift on the log-transform as variables can be exactly zero
