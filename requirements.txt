@@ -2,10 +2,10 @@ numpy~=1.26.4
 matplotlib~=3.8.3
 h5py~=3.10.0
 an_cockrell @ git+https://github.com/knappa/an-cockrell.git
-scipy~=1.12.0
-scikit-learn~=1.4.1.post1
+scipy~=1.15.0
+scikit-learn~=1.6.1
 tqdm~=4.66.1
-Cython~=3.0.10
-setuptools~=68.2.2
-attrs~=23.2.0
+Cython~=3.1.0a1
+setuptools~=75.8.2
+attrs~=25.1.0
 wolf_sheep_grass @ git+https://github.com/knappa/wolf-sheep-grass.git

@@ -11,6 +11,7 @@ from scipy.special import logsumexp
 from scipy.stats import multivariate_normal
 
 from consts import (
+    OBSERVABLES,
     UNIFIED_STATE_SPACE_DIMENSION,
     default_params,
     init_only_params,
@@ -21,20 +22,6 @@ from consts import (
 from modify_epi_spatial import modify_model
 from transform import transform_intrinsic_to_kf, transform_kf_to_intrinsic
 from util import gale_shapely_matching, model_macro_data, slogdet
-
-OBSERVABLES = [
-    "P_DAMPS",
-    "T1IFN",
-    "TNF",
-    "IFNg",
-    "IL1",
-    "IL6",
-    "IL8",
-    "IL10",
-    "IL12",
-    "IL18",
-    "extracellular_virus",
-]
 
 
 def normalize_dir_name(name: str) -> str:
@@ -77,7 +64,7 @@ class PhenotypeKFAnCockrell:
     def phenotype_distribution_default(self):
         return np.log(np.full(self.num_phenotypes, 1 / self.num_phenotypes, dtype=np.float64))
 
-    # in the transformed coordinates
+    # in transformed coordinates
     observation_uncertainty_cov: np.ndarray = field()
 
     # noinspection PyUnresolvedReferences
@@ -87,7 +74,7 @@ class PhenotypeKFAnCockrell:
 
     # dimensions: (phenotype, model)
     ensemble: List[List[AnCockrellModel]] = Factory(list)
-    ensemble_size: int = field(default=1 + 2 * UNIFIED_STATE_SPACE_DIMENSION)
+    ensemble_size: int = field(init=False)
 
     microstate_save_directory: Optional[str] = field(default=None, converter=normalize_dir_name)
 
@@ -124,6 +111,8 @@ class PhenotypeKFAnCockrell:
         assert (
             self.observation_uncertainty_cov.shape[0] == self.observation_uncertainty_cov.shape[1]
         )
+
+        self.ensemble_size = 1 + 2*UNIFIED_STATE_SPACE_DIMENSION
 
         # TODO: if the per_phenotype_means/covs is only for 1 phenotype, expand it to all N equally
 

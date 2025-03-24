@@ -215,3 +215,17 @@ variational_params_indices = {s: i + len(state_vars) for i, s in enumerate(state
 UNIFIED_STATE_SPACE_DIMENSION = len(state_vars) + len(variational_params)
 
 assert all(param in default_params for param in variational_params)
+
+OBSERVABLES = [
+    "P_DAMPS",
+    "T1IFN",
+    "TNF",
+    "IFNg",
+    "IL1",
+    "IL6",
+    "IL8",
+    "IL10",
+    "IL12",
+    "IL18",
+    "extracellular_virus",
+]

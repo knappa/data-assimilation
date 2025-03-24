@@ -275,6 +275,7 @@ def modify_model(
     state_vars,
     state_var_indices,
     verbose: bool = False,
+    rng: np.random.Generator = np.random.default_rng(),
 ):
     """
     Modify a model's microstate to fit a given macrostate
@@ -286,6 +287,7 @@ def modify_model(
     :param state_var_indices:
     :param state_vars:
     :param variational_params:
+    :param rng: optionally, specify a random number generator
     :return: None
     """
     np.abs(desired_state, out=desired_state)  # in-place absolute value
@@ -429,7 +431,7 @@ def modify_model(
     elif dc_delta < 0:
         # need fewer dcs, kill them randomly
         num_to_kill = min(-dc_delta, model.num_dcs)
-        dcs_to_kill = np.random.choice(model.num_dcs, num_to_kill, replace=False)
+        dcs_to_kill = rng.choice(model.num_dcs, num_to_kill, replace=False)
         dc_idcs = np.where(model.dc_mask)[0]
         model.dc_mask[dc_idcs[dcs_to_kill]] = False
         model.num_dcs -= num_to_kill
@@ -443,7 +445,7 @@ def modify_model(
     elif nk_delta < 0:
         # need fewer nks, kill them randomly
         num_to_kill = min(-nk_delta, model.num_nks)
-        nks_to_kill = np.random.choice(model.num_nks, num_to_kill, replace=False)
+        nks_to_kill = rng.choice(model.num_nks, num_to_kill, replace=False)
         nk_idcs = np.where(model.nk_mask)[0]
         model.nk_mask[nk_idcs[nks_to_kill]] = False
         model.num_nks -= num_to_kill
@@ -464,14 +466,14 @@ def modify_model(
                     )
                     & (model.endothelial_activation == EndoType.Activated)
                     & (
-                        np.random.rand(*model.geometry)
+                        rng.random(size=model.geometry)
                         < model.activated_endo_pmn_spawn_prob
                     )
                 )
             )
         )
         if len(pmn_spawn_list) > 0:
-            for loc_idx in np.random.choice(len(pmn_spawn_list), pmn_delta):
+            for loc_idx in rng.choice(len(pmn_spawn_list), pmn_delta):
                 model.create_pmn(
                     location=pmn_spawn_list[loc_idx],
                     age=0,
@@ -483,7 +485,7 @@ def modify_model(
     elif pmn_delta < 0:
         # need fewer pmns, kill them randomly
         num_to_kill = min(-pmn_delta, model.num_pmns)
-        pmns_to_kill = np.random.choice(model.num_pmns, num_to_kill, replace=False)
+        pmns_to_kill = rng.choice(model.num_pmns, num_to_kill, replace=False)
         pmn_idcs = np.where(model.pmn_mask)[0]
         model.pmn_mask[pmn_idcs[pmns_to_kill]] = False
         model.num_pmns -= num_to_kill
@@ -508,7 +510,7 @@ def modify_model(
     elif macro_delta < 0:
         # need fewer macrophages, kill them randomly
         num_to_kill = min(-macro_delta, model.num_macros)
-        macros_to_kill = np.random.choice(model.num_macros, num_to_kill, replace=False)
+        macros_to_kill = rng.choice(model.num_macros, num_to_kill, replace=False)
         macro_idcs = np.where(model.macro_mask)[0]
         model.macro_mask[macro_idcs[macros_to_kill]] = False
         model.num_macros -= num_to_kill

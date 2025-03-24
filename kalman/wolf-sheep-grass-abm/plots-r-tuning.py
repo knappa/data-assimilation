@@ -9,7 +9,9 @@ from matplotlib.legend_handler import HandlerBase
 
 from transform import transform_kf_to_intrinsic
 
-fig, axs = plt.subplots(1, 4, figsize=(13, 3), sharex=True, sharey=True, width_ratios=[1.0, 1.0, 1.0, 0.5])
+fig, axs = plt.subplots(
+    1, 4, figsize=(13, 3), sharex=True, sharey=True, width_ratios=[1.0, 1.0, 1.0, 0.5]
+)
 
 orgs = []
 finals = []
@@ -38,14 +40,14 @@ for p_idx, prefix in enumerate(["10.00", "01.00", "00.10", "00.01"]):
             np.median(surp_init, axis=0),
             label="original surprisal",
             color=mpl.colormaps["tab10"](p_idx),
-            linestyle=":"
+            linestyle=":",
         )[0]
     )
     finals.append(
         axs[2].plot(
             np.median(surp_final, axis=0)[:-1],
             label="Meas. stoch. " + prefix,
-            color=mpl.colormaps["tab10"](p_idx)
+            color=mpl.colormaps["tab10"](p_idx),
         )[0]
     )
 
@@ -82,14 +84,14 @@ for p_idx, prefix in enumerate(["10.00", "01.00", "00.10", "00.01"]):
             np.median(surp_init, axis=0),
             label="original surprisal",
             color=mpl.colormaps["tab10"](p_idx),
-            linestyle=":"
+            linestyle=":",
         )[0]
     )
     finals.append(
         axs[1].plot(
             np.median(surp_final, axis=0)[:-1],
             label="Meas. stoch. " + prefix,
-            color=mpl.colormaps["tab10"](p_idx)
+            color=mpl.colormaps["tab10"](p_idx),
         )[0]
     )
 
@@ -126,14 +128,14 @@ for p_idx, prefix in enumerate(["10.00", "01.00", "00.10", "00.01"]):
             np.median(surp_init, axis=0),
             label="original surprisal",
             color=mpl.colormaps["tab10"](p_idx),
-            linestyle=":"
+            linestyle=":",
         )[0]
     )
     finals.append(
         axs[0].plot(
             np.median(surp_final, axis=0)[:-1],
             label="Meas. stoch. " + prefix,
-            color=mpl.colormaps["tab10"](p_idx)
+            color=mpl.colormaps["tab10"](p_idx),
         )[0]
     )
 
@@ -805,7 +807,9 @@ for k in range(len(surp_files)):
                 axs_state[idx].get_ylim()[1],
                 1.2
                 * np.max(
-                    transform_kf_to_intrinsic(h5file["virtual_patient_trajectory"][:, idx], index=idx)
+                    transform_kf_to_intrinsic(
+                        h5file["virtual_patient_trajectory"][:, idx], index=idx
+                    )
                 ),
             )
             axs_state[idx].set_ylim(bottom=ymin, top=ymax)
@@ -868,6 +872,6 @@ for k in range(len(surp_files)):
             loc="outside lower center",
         )
         # fig.suptitle("State Prediction")
-        #fig.savefig("typical-grass-state.pdf")
-        #plt.close(fig)
+        # fig.savefig("typical-grass-state.pdf")
+        # plt.close(fig)
         plt.show()

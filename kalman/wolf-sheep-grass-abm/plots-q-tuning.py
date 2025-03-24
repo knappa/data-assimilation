@@ -8,21 +8,22 @@ from matplotlib.legend_handler import HandlerBase
 
 from transform import transform_kf_to_intrinsic
 
-
 SMALL_SIZE = 8
 MEDIUM_SIZE = 10
 BIGGER_SIZE = 12
 
-plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
-plt.rc('axes', titlesize=SMALL_SIZE)     # fontsize of the axes title
-plt.rc('axes', labelsize=MEDIUM_SIZE)    # fontsize of the x and y labels
-plt.rc('xtick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
-plt.rc('ytick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
-plt.rc('legend', fontsize=SMALL_SIZE)    # legend fontsize
-plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
+plt.rc("font", size=SMALL_SIZE)  # controls default text sizes
+plt.rc("axes", titlesize=SMALL_SIZE)  # fontsize of the axes title
+plt.rc("axes", labelsize=MEDIUM_SIZE)  # fontsize of the x and y labels
+plt.rc("xtick", labelsize=SMALL_SIZE)  # fontsize of the tick labels
+plt.rc("ytick", labelsize=SMALL_SIZE)  # fontsize of the tick labels
+plt.rc("legend", fontsize=SMALL_SIZE)  # legend fontsize
+plt.rc("figure", titlesize=BIGGER_SIZE)  # fontsize of the figure title
 
 
-fig, axs = plt.subplots(1, 4, figsize=(13, 3), sharex=True, sharey=True, width_ratios=[1.0,1.0,1.0,0.5])
+fig, axs = plt.subplots(
+    1, 4, figsize=(13, 3), sharex=True, sharey=True, width_ratios=[1.0, 1.0, 1.0, 0.5]
+)
 
 orgs = []
 finals = []
@@ -147,6 +148,7 @@ for p_idx, prefix in enumerate(["0.001", "0.005", "0.010", "0.050"]):
 axs[2].set_xlabel("time")
 axs[2].title.set_text("Measuring Wolves")
 
+
 class AnyObjectHandler(HandlerBase):
     def create_artists(self, legend, orig_handle, x0, y0, width, height, fontsize, trans):
         size = len(orig_handle)
@@ -163,6 +165,7 @@ class AnyObjectHandler(HandlerBase):
             )
 
         return ls
+
 
 axs[3].set_axis_off()
 axs[3].legend(
