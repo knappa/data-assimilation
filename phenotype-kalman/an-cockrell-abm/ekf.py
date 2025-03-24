@@ -13,16 +13,13 @@ from scipy.stats import multivariate_normal
 from sklearn.covariance import LedoitWolf
 from tqdm.auto import tqdm
 
-from phkf_ac.consts import (
-    UNIFIED_STATE_SPACE_DIMENSION,
-    default_params,
-    init_only_params,
-    state_var_indices,
-    state_vars,
-    variational_params,
-)
-from phkf_ac.transform import transform_intrinsic_to_kf, transform_kf_to_intrinsic
-from phkf_ac.util import fix_title, gale_shapely_matching, model_macro_data, slogdet
+from phkf_ac.consts import (UNIFIED_STATE_SPACE_DIMENSION, default_params,
+                            init_only_params, state_var_indices, state_vars,
+                            variational_params)
+from phkf_ac.transform import (transform_intrinsic_to_kf,
+                               transform_kf_to_intrinsic)
+from phkf_ac.util import (fix_title, gale_shapely_matching, model_macro_data,
+                          slogdet)
 
 ################################################################################
 

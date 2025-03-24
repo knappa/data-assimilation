@@ -1,7 +1,7 @@
 import numpy as np
 from an_cockrell import AnCockrellModel, EndoType, EpiType
 
-from util import compute_desired_epi_counts, smooth_random_field
+from phkf_ac.util import compute_desired_epi_counts, smooth_random_field
 
 ################################################################################
 

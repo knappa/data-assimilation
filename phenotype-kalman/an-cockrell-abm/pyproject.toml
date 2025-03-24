@@ -2,6 +2,21 @@
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+# ...
+# By default, include-package-data is true in pyproject.toml,
+# so you do NOT have to specify this line.
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+#mypkg = ["*.txt", "*.rst"]
+phkf_ac = ["data/*"]
+
+[tool.setuptools.exclude-package-data]
+phkf_ac = [".gitattributes"]
 
 [project]
 name = "phkf_ac"
@@ -19,7 +34,7 @@ classifiers = [
 ]
 
 [project.scripts]
-pruning = "phkf_ac:main_cli"
+phkf-ac = "phkf_ac:main_cli"
 
 
 [project.urls]

@@ -4,7 +4,7 @@ import h5py
 import numpy as np
 from an_cockrell import AnCockrellModel, EndoType, EpiType, epitype_one_hot_encoding
 
-from util import compute_desired_epi_counts, smooth_random_field
+from phkf_ac.util import compute_desired_epi_counts, smooth_random_field
 
 ################################################################################
 
@@ -14,7 +14,7 @@ def quantization_maker(
     quantization_similarity_loss_weight: float,
     typical_neighborhood_loss_weight: float,
     neighbor_similarity_loss_weight: float,
-    statistics_hdf5_file: str,
+    statistics_hdf5_file,
 ) -> Callable[[AnCockrellModel, np.ndarray, Iterable[EpiType], int, int], EpiType]:
     with h5py.File(statistics_hdf5_file, "r") as h5file:
         mean = h5file["mean"][:]
@@ -122,11 +122,14 @@ def quantization_maker(
     return _quantizer
 
 
+from importlib.resources import files
+
 quantizer = quantization_maker(
     quantization_similarity_loss_weight=1.0,
     typical_neighborhood_loss_weight=0.002,
     neighbor_similarity_loss_weight=1.0,
-    statistics_hdf5_file="local-nbhd-statistics.hdf5",
+    # statistics_hdf5_file="data/local-nbhd-statistics.hdf5",
+    statistics_hdf5_file=files("phkf_ac.data").joinpath("local-nbhd-statistics.hdf5"),
 )
 
 

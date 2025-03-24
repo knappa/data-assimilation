@@ -1,0 +1,794 @@
+from copy import deepcopy
+from typing import Callable, Final, List, Optional, Tuple
+
+import numpy as np
+import scipy
+from an_cockrell import AnCockrellModel
+from attrs import define, field
+from numpy.linalg import LinAlgError
+from scipy.special import logsumexp
+
+from phkf_ac.consts import (
+    OBSERVABLES,
+    UNIFIED_STATE_SPACE_DIMENSION,
+    default_params,
+    init_only_params,
+    state_var_indices,
+    state_vars,
+    variational_params,
+)
+from phkf_ac.transform import transform_intrinsic_to_kf, transform_kf_to_intrinsic
+from phkf_ac.util import gale_shapely_matching, model_macro_data, slogdet
+
+
+def normalize_dir_name(name: str) -> str:
+    if name is None or len(name) == 0:
+        name = "."
+    if not name.endswith("/"):
+        name = name + "/"
+    return name
+
+
+@define(kw_only=True, slots=True)
+class PhenotypeKFAnCockrell:
+    """
+
+    :param num_phenotypes:
+    :param pca_matrix:
+    :param phenotype_weight_means:
+    :param phenotype_weight_covs:
+    :param observation_uncertainty_cov:
+    """
+
+    num_phenotypes: int = field(init=True)
+
+    transformed: bool = field(init=True, default=False)
+    transform_intrinsic_to_kf: Optional[Callable] = field(init=True, default=None)
+    transform_kf_to_intrinsic: Optional[Callable] = field(init=True, default=None)
+
+    # PCA from 2017*41 dimensions to 3 by matrix C (3,2017*41) with center m (2017*41,)
+    # then each phenotype_i from gaussian with mean m_i (3,) and cov P_i (3,3)
+    # P(phi_i | x) = exp( -(1/2) (C(x-m)-m_i)^T P_i^{-1} (C(x-m)-m_i) ) / sum_i P(\phi_i | x)
+    pca_center: np.ndarray = field(init=True)
+    pca_matrix: np.ndarray = field(init=True)
+    phenotype_weight_means: np.ndarray = field(init=True)
+    phenotype_weight_covs: np.ndarray = field(init=True)
+
+    # phenotype distributions
+    log_phenotype_distribution: np.ndarray = field()
+
+    # noinspection PyUnresolvedReferences
+    @log_phenotype_distribution.default
+    def phenotype_distribution_default(self):
+        return np.log(np.full(self.num_phenotypes, 1 / self.num_phenotypes, dtype=np.float64))
+
+    # in transformed coordinates
+    observation_uncertainty_cov: np.ndarray = field()
+
+    # noinspection PyUnresolvedReferences
+    @observation_uncertainty_cov.default
+    def observation_uncertainty_default(self):
+        return np.full(len(OBSERVABLES), 1.0, dtype=np.float64)
+
+    # dimensions: (phenotype, model)
+    ensemble: List[List[AnCockrellModel]] = field(init=False, factory=list)
+    ensemble_size: int = field(init=False)
+
+    microstate_save_directory: Optional[str] = field(default=None, converter=normalize_dir_name)
+
+    # dimensions: (phenotype,ensemble,time,macrostate)
+    ensemble_macrostate: np.ndarray = field(init=False)
+    # dimensions: (phenotype,time,macrostate)
+    ensemble_macrostate_mean: np.ndarray = field(init=False)
+    # dimensions: (phenotype,time,macrostate,macrostate)
+    ensemble_macrostate_cov: np.ndarray = field(init=False)
+
+    model_modification_algorithm = field()  # one of the modify_model functions
+
+    end_time: Final[int] = field(default=2016)
+    _initial_time: int = field(default=-1, init=False)
+    _current_time: int = field(default=-1, init=False)
+    _kf_iteration: int = field(default=0, init=False)
+
+    def __attrs_post_init__(self):
+        assert (
+            self.num_phenotypes
+            == self.phenotype_weight_means.shape[0]
+            == self.phenotype_weight_covs.shape[0]
+            == self.log_phenotype_distribution.shape[0]
+        ), "mismatch in number of phenotypes"
+        assert (
+            self.phenotype_weight_means.shape[1]
+            == self.phenotype_weight_covs.shape[1]
+            == self.phenotype_weight_covs.shape[2]
+        ), "dimension mismatch"
+
+        # check the R matrix (observation uncertainty)
+        # if it is a vector, bump it up to a diagonal matrix
+        assert 1 <= len(self.observation_uncertainty_cov.shape) <= 2
+        if len(self.observation_uncertainty_cov.shape) == 1:
+            self.observation_uncertainty_cov = np.diag(self.observation_uncertainty_cov)
+        assert (
+            self.observation_uncertainty_cov.shape[0] == self.observation_uncertainty_cov.shape[1]
+        )
+
+        self.ensemble_size = 1 + 2 * UNIFIED_STATE_SPACE_DIMENSION
+
+        # TODO: if the per_phenotype_means/covs is only for 1 phenotype, expand it to all N equally
+
+    def initialize_ensemble(
+        self, *, initialization_means: np.ndarray, initialization_covs: np.ndarray, t: int = 0
+    ) -> None:
+        """
+        Initialize the ensemble. Note that the initialization parameters are, while related, not the same as the state
+        parameters.
+
+        :param initialization_means:
+        :param initialization_covs:
+        :param t: initial time (default 0)
+        :return:
+        """
+        self.ensemble_macrostate = np.zeros(
+            (
+                self.num_phenotypes,
+                self.ensemble_size,
+                self.end_time + 1,
+                UNIFIED_STATE_SPACE_DIMENSION,
+            )
+        )
+        self.ensemble_macrostate_mean = np.zeros(
+            (self.num_phenotypes, self.end_time + 1, UNIFIED_STATE_SPACE_DIMENSION)
+        )
+        self.ensemble_macrostate_cov = np.zeros(
+            (
+                self.num_phenotypes,
+                self.end_time + 1,
+                UNIFIED_STATE_SPACE_DIMENSION,
+                UNIFIED_STATE_SPACE_DIMENSION,
+            )
+        )
+
+        # TODO: consider per-phenotype initialization (Note that these aren't quite the same parameters, so this can't
+        #  just be read from the existing data.)
+        for phenotype_idx in range(self.num_phenotypes):
+            self.ensemble.append(
+                model_sigma_point_ensemble_from(initialization_means, initialization_covs)
+            )
+            for model_idx in range(self.num_phenotypes):
+                self.ensemble_macrostate[phenotype_idx, model_idx, 0, :] = model_macro_data(
+                    self.ensemble[phenotype_idx][model_idx]
+                )
+
+        self._current_time = t
+
+    def project_ensemble_to(
+        self, *, t: int = -1, update_ensemble: bool = False, save_microstate_files: bool = False
+    ) -> None:
+        """
+        Project the ensemble to time t.
+        :param t: time (default -1, corresponding to end_time)
+        :param update_ensemble: if True, move saved ensemble members to the desired time
+        :param save_microstate_files: if True, save microstates to HDF5 files
+        :return: None
+        """
+        assert (
+            not save_microstate_files or self.microstate_save_directory is not None
+        ), "Cannot save microstates without specifying a directory"
+
+        if t == -1:
+            t = self.end_time
+
+        assert t >= self._current_time, "Cannot update time to the past"
+
+        # if we aren't going to actually update the ensemble, do all of this on a copy
+        if update_ensemble:
+            models = self.ensemble
+        else:
+            models = deepcopy(self.ensemble)
+
+        for time_idx in range(self._current_time + 1, t + 1):
+            for phenotype_idx in range(self.num_phenotypes):
+                for model_idx, model in enumerate(models[phenotype_idx]):
+                    model.time_step()
+                    self.ensemble_macrostate[phenotype_idx, model_idx, time_idx, :] = (
+                        model_macro_data(model)
+                    )
+                    if save_microstate_files:
+                        model.save(
+                            filename=self.microstate_save_directory
+                            + (
+                                f"phenotype{phenotype_idx}-model{model_idx}-t{time_idx}.hdf5"
+                                if update_ensemble
+                                else f"phenotype{phenotype_idx}-model{model_idx}-t{time_idx}-projection.hdf5"
+                            )
+                        )
+
+    def kf_update(
+        self,
+        *,
+        observation_time: int,
+        observation_types: List[str],
+        measurements: np.ndarray,
+        save_microstate_files: bool = False,
+        log: bool = True,
+    ) -> None:
+        """
+        Perform the KF update to the ensemble.
+
+        :param observation_time: time of observation
+        :param observation_types: list of measured quantities
+        :param measurements: values of measured quantities
+        :param save_microstate_files: save projected/updated microstates
+        :return: None
+        """
+        assert len(observation_types) == len(measurements)
+        dim_observation = len(observation_types)
+        assert observation_time >= self._current_time, "KF update cannot work backward in time"
+        if observation_time == self._current_time:
+            raise NotImplementedError(
+                "Multiple same-time observations split between different function calls are unsupported"
+            )
+
+        delta_time: int = observation_time - self._current_time
+
+        if log:
+            print(f"Projecting ensemble to t={observation_time}", flush=True)
+
+        self.project_ensemble_to(
+            t=observation_time,
+            update_ensemble=True,
+            save_microstate_files=save_microstate_files,
+        )
+
+        if log:
+            print(f"Projecting ensemble to t={observation_time} (Finished)", flush=True)
+
+        # ########## Step 1: assemble the predictive distributions from the ensemble macrostates from the previous
+        # observation time to the new observation time
+
+        # Step 1a. Determine weights
+        if log:
+            print(f"Determining weights", end="")
+
+        time_inclusion_matrix = np.zeros((2017 * 41, delta_time * 41), dtype=np.float64)
+        for time_idx in range(self._current_time, observation_time):
+            print(41 * (self._current_time + time_idx), 41 * (self._current_time + time_idx + 1))
+            print(41 * time_idx, 41 * (time_idx + 1))
+            time_inclusion_matrix[
+                41 * (self._current_time + time_idx) : 41 * (self._current_time + time_idx + 1),
+                41 * time_idx : 41 * (time_idx + 1),
+            ] = np.identity(41)
+        restricted_time_pca_matrix = self.pca_matrix @ time_inclusion_matrix
+        reduced_states = np.einsum(
+            "ij,pmj->pmi",
+            restricted_time_pca_matrix,  # [3,41*dt]
+            self.ensemble_macrostate.reshape((self.num_phenotypes, self.ensemble_size, -1))
+            - self.pca_center,  # [p,m,t,s] -> [p,m,j]
+        )
+        log_weights = np.zeros(
+            (self.num_phenotypes, self.ensemble_size),
+            dtype=np.float64,
+        )
+        # TODO: unscented weights?
+        for phenotype_idx in range(self.num_phenotypes):
+            mean_difference_vec = reduced_states - self.phenotype_weight_means[phenotype_idx]
+            try:
+                temp = np.linalg.lstsq(
+                    self.phenotype_weight_covs[phenotype_idx],
+                    mean_difference_vec,
+                )[0]
+            except LinAlgError:
+                temp = (
+                    scipy.linalg.pinvh(self.phenotype_weight_covs[phenotype_idx], return_rank=False)
+                    @ mean_difference_vec
+                )
+            log_weights[phenotype_idx, :] = (
+                -(
+                    mean_difference_vec @ temp
+                    + slogdet(self.phenotype_weight_covs[phenotype_idx])[1]
+                )
+                / 2.0
+            )
+        # normalize weights
+        for ensemble_idx in range(log_weights.shape[1]):
+            log_weights[:, ensemble_idx] -= logsumexp(log_weights[:, ensemble_idx])
+
+        # compute weighted per-phenotype and per-time mean and covariance
+        for phenotype_idx in range(self.num_phenotypes):
+            weights = np.exp(log_weights[phenotype_idx, :])
+            self.ensemble_macrostate_mean[phenotype_idx, :, :] = np.average(
+                self.ensemble_macrostate[phenotype_idx, :, :, :], weights=weights, axis=0
+            )
+            for time_idx in range(self._current_time + 1, observation_time + 1):
+                self.ensemble_macrostate_cov[phenotype_idx, time_idx, :, :] = np.cov(
+                    self.ensemble_macrostate[phenotype_idx, :, time_idx, :],
+                    aweights=weights,
+                    rowvar=False,
+                )
+
+        if log:
+            print(f" (Finished)")
+
+        # ######### Step 2: perform the Kalman update from the observation, per phenotype
+
+        if log:
+            print(f"Kalman update", end="")
+
+        # Step 2a. Compute some generally useful stuff
+
+        # assemble the matrix for the observation model
+        H = np.zeros((dim_observation, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
+        for h_idx, obs_name in enumerate(observation_types):
+            H[h_idx, state_var_indices[obs_name]] = 1.0
+
+        # R is the restriction of the observation uncertainty matrix to the observed subset
+        R = H @ self.observation_uncertainty_cov @ H.T
+
+        observation = transform_intrinsic_to_kf(measurements)
+
+        ident_matrix = np.identity(UNIFIED_STATE_SPACE_DIMENSION)
+
+        # Step 2b. Kalman update for each phenotype
+
+        for phenotype_idx in range(self.num_phenotypes):
+            mu = self.ensemble_macrostate_mean[phenotype_idx, observation_time, :]
+            P = self.ensemble_macrostate_cov[phenotype_idx, observation_time, :, :]
+
+            v = observation - (H @ mu)
+            S = H @ P @ H.T + R
+
+            self.log_phenotype_distribution[phenotype_idx] += (
+                -(v.T @ scipy.linalg.pinvh(S) @ v - slogdet(S)[1]) / 2
+            )
+
+            K = P @ H.T @ np.linalg.pinv(S)
+
+            # Note for future readers: mu[:] and P[:,:] access the the contents of the original arrays that mu and P
+            # are derived from. If you replaced this with mu and P, you'd just get new arrays and the originals would
+            # be unchanged.
+            mu[:] += K @ v
+            # Joseph form update (See e.g. https://www.anuncommonlab.com/articles/how-kalman-filters-work/part2.html)
+            A = ident_matrix - K @ H
+            P[:, :] = np.nan_to_num(A @ P @ A.T + K @ R @ K.T)
+
+            # Make sure that the covariance matrix is on-the-nose symmetric
+            P[:, :] = np.nan_to_num((P + P.T) / 2.0)
+            # Make sure that the covariance matrix is positive definite
+            min_diag = np.min(np.diag(P))
+            if min_diag <= 1e-6:
+                P[:, :] += (1e-6 - min_diag) * ident_matrix
+
+        # Step 2c: Normalize overall phenotype probabilities
+        self.log_phenotype_distribution -= logsumexp(self.log_phenotype_distribution)
+
+        # ######### Step 3: As in the unscented kalman filter, find the + of the new Gaussian's and best matching to
+        # the ensemble members
+
+        ensemble_target_locs = np.zeros(
+            (
+                self.num_phenotypes,
+                2 * UNIFIED_STATE_SPACE_DIMENSION + 1,
+                UNIFIED_STATE_SPACE_DIMENSION,
+            ),
+            dtype=np.float64,
+        )
+        model_to_sample_pairing = np.zeros(
+            (self.num_phenotypes, 2 * UNIFIED_STATE_SPACE_DIMENSION + 1), dtype=np.intp
+        )
+        for phenotype_idx in range(self.num_phenotypes):
+            ensemble_target_locs[phenotype_idx, 0, :] = self.ensemble_macrostate_mean[
+                phenotype_idx, observation_time
+            ]
+            U, S, Vh = np.linalg.svd(
+                self.ensemble_macrostate_cov[phenotype_idx, observation_time, :, :],
+                hermitian=True,
+                compute_uv=True,
+                full_matrices=True,
+            )
+            principal_axes = U * np.sqrt(S)  # TODO: proper weights
+            for axis_idx, axis in enumerate(principal_axes):
+                ensemble_target_locs[phenotype_idx, 2 * axis + 1, :] = axis
+                ensemble_target_locs[phenotype_idx, 2 * axis + 2, :] = -axis
+
+            model_to_sample_pairing[phenotype_idx, :] = gale_shapely_matching(
+                new_sample=ensemble_target_locs[phenotype_idx],
+                macro_data=self.ensemble_macrostate[phenotype_idx, observation_time],
+            )
+
+        if log:
+            print(f" (Finished)")
+
+        # ######### Step 4: Microstate synthesis
+
+        if log:
+            print(f"Microstate synthesis", end="")
+
+        for phenotype_idx in range(self.num_phenotypes):
+            for model_idx in range(2 * UNIFIED_STATE_SPACE_DIMENSION + 1):
+                self.model_modification_algorithm(
+                    self.ensemble[phenotype_idx][model_idx],
+                    transform_kf_to_intrinsic(
+                        ensemble_target_locs[
+                            phenotype_idx, model_to_sample_pairing[phenotype_idx, model_idx], :
+                        ]
+                    ),
+                    verbose=True,  # TODO: remember to revisit
+                    state_var_indices=state_var_indices,
+                    state_vars=state_vars,
+                    variational_params=variational_params,
+                )
+
+        if log:
+            print(f" (Finished)")
+
+        # ######### Step 5: Cleanup
+
+        # update counters
+        # previous_time = self._current_time
+        self._current_time = observation_time
+        self._kf_iteration += 1
+
+    def plot_state_vars(self, TIME_SPAN, vp_trajectory, cycle, SAMPLE_INTERVAL, FILE_PREFIX):
+        """
+        plot projection of state variables
+
+        :return:
+        """
+        import matplotlib.pyplot as plt
+
+        from phkf_ac.util import fix_title
+
+        (graph_rows, graph_cols, graph_figsize) = figure_gridlayout(len(state_vars))
+
+        fig, axs = plt.subplots(
+            nrows=graph_rows,
+            ncols=graph_cols,
+            figsize=graph_figsize,
+            sharex=True,
+            sharey=False,
+            layout="constrained",
+        )
+        for idx, state_var_name in enumerate(state_vars):
+            row, col = divmod(idx, graph_cols)
+            (true_value,) = axs[row, col].plot(
+                range(TIME_SPAN + 1),
+                vp_trajectory[:, idx],
+                label="true value",
+                linestyle=":",
+                color="gray",
+            )
+            (past_estimate_center_line,) = axs[row, col].plot(
+                range((cycle + 1) * SAMPLE_INTERVAL),
+                transform_kf_to_intrinsic(
+                    # TODO: indices
+                    self.ensemble_macrostate_mean[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx],
+                    index=idx,
+                ),
+                label="estimate of past",
+                color="black",
+            )
+            past_estimate_range = axs[row, col].fill_between(
+                range((cycle + 1) * SAMPLE_INTERVAL),
+                np.maximum(
+                    0.0,
+                    transform_kf_to_intrinsic(
+                        # TODO: indices
+                        self.ensemble_macrostate_mean[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
+                        - np.sqrt(
+                            self.ensemble_macrostate_cov[
+                                cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx
+                            ]
+                        ),
+                        index=idx,
+                    ),
+                ),
+                # np.minimum(
+                #     10 * max_scales[state_var_name],
+                transform_kf_to_intrinsic(
+                    # TODO: indices
+                    self.ensemble_macrostate_mean[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
+                    + np.sqrt(
+                        self.ensemble_macrostate_cov[
+                            cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx
+                        ]
+                    ),
+                    index=idx,
+                ),
+                # ),
+                color="gray",
+                alpha=0.35,
+            )
+
+            # TODO: indices
+            mu = self.ensemble_macrostate_mean[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
+            sigma = np.sqrt(
+                self.ensemble_macrostate_cov[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]
+            )
+
+            (prediction_center_line,) = axs[row, col].plot(
+                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+                transform_kf_to_intrinsic(mu, index=idx),
+                label="prediction",
+                color="blue",
+            )
+            prediction_range = axs[row, col].fill_between(
+                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+                np.maximum(0.0, transform_kf_to_intrinsic(mu - sigma, index=idx)),
+                transform_kf_to_intrinsic(
+                    mu + sigma,
+                    index=idx,
+                ),
+                color="blue",
+                alpha=0.35,
+            )
+            axs[row, col].set_title(fix_title(state_var_name), loc="left", wrap=True)
+            axs[row, col].set_ylim(bottom=max(0.0, axs[row, col].get_ylim()[0]))
+        # remove axes on unused graphs
+        for idx in range(
+            len(state_vars),
+            graph_rows * graph_cols,
+        ):
+            row, col = divmod(idx, graph_cols)
+            axs[row, col].set_axis_off()
+
+        # place legend
+        if len(state_vars) < graph_rows * graph_cols:
+            legend_placement = axs[graph_rows - 1, graph_cols - 1]
+            legend_loc = "upper left"
+        else:
+            legend_placement = fig
+            legend_loc = "outside lower center"
+
+        # noinspection PyUnboundLocalVariable
+        legend_placement.legend(
+            [
+                true_value,
+                (past_estimate_center_line, past_estimate_range),
+                (prediction_center_line, prediction_range),
+            ],
+            [
+                true_value.get_label(),
+                past_estimate_center_line.get_label(),
+                prediction_center_line.get_label(),
+            ],
+            loc=legend_loc,
+        )
+        fig.suptitle("State Prediction")
+        fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-state.pdf")
+        plt.close(fig)
+
+    def plot_parameters(self, TIME_SPAN, cycle, SAMPLE_INTERVAL, FILE_PREFIX, vp_init_params):
+        """
+        plot projection of parameters
+
+        :return:
+        """
+        import matplotlib.pyplot as plt
+
+        from phkf_ac.util import fix_title
+
+        len_state_vars = self.ensemble_macrostate_mean.shape[-1]
+
+        (graph_rows, graph_cols, graph_figsize) = figure_gridlayout(len(variational_params))
+
+        fig, axs = plt.subplots(
+            nrows=graph_rows,
+            ncols=graph_cols,
+            figsize=graph_figsize,
+            sharex=True,
+            sharey=False,
+            layout="constrained",
+        )
+        (
+            true_value,
+            past_estimate_center_line,
+            past_estimate_range,
+            prediction_center_line,
+            prediction_range,
+        ) = [None] * 5
+        for idx, param_name in enumerate(variational_params):
+            row, col = divmod(idx, graph_cols)
+
+            if param_name in vp_init_params:
+                (true_value,) = axs[row, col].plot(
+                    [0, TIME_SPAN + 1],
+                    [vp_init_params[param_name]] * 2,
+                    label="true value",
+                    color="gray",
+                    linestyle=":",
+                )
+
+            (past_estimate_center_line,) = axs[row, col].plot(
+                range((cycle + 1) * SAMPLE_INTERVAL),
+                transform_kf_to_intrinsic(
+                    # TODO: indices
+                    self.ensemble_macrostate_mean[
+                        cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
+                    ],
+                    index=len_state_vars + idx,
+                ),
+                color="black",
+                label="estimate of past",
+            )
+
+            past_estimate_range = axs[row, col].fill_between(
+                range((cycle + 1) * SAMPLE_INTERVAL),
+                np.maximum(
+                    0.0,
+                    transform_kf_to_intrinsic(
+                        # TODO: indices
+                        self.ensemble_macrostate_mean[
+                            cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
+                        ]
+                        - np.sqrt(
+                            self.ensemble_macrostate_cov[
+                                cycle,
+                                : (cycle + 1) * SAMPLE_INTERVAL,
+                                len_state_vars + idx,
+                                len_state_vars + idx,
+                            ]
+                        ),
+                        index=len_state_vars + idx,
+                    ),
+                ),
+                transform_kf_to_intrinsic(
+                    # TODO: indices
+                    self.ensemble_macrostate_mean[
+                        cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
+                    ]
+                    + np.sqrt(
+                        self.ensemble_macrostate_cov[
+                            cycle,
+                            : (cycle + 1) * SAMPLE_INTERVAL,
+                            len_state_vars + idx,
+                            len_state_vars + idx,
+                        ]
+                    ),
+                    index=len_state_vars + idx,
+                ),
+                color="gray",
+                alpha=0.35,
+                label="past cone of uncertainty",
+            )
+
+            (prediction_center_line,) = axs[row, col].plot(
+                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+                transform_kf_to_intrinsic(
+                    # TODO: indices
+                    self.ensemble_macrostate_mean[
+                        cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
+                    ],
+                    index=len_state_vars + idx,
+                ),
+                label="predictive estimate",
+                color="blue",
+            )
+
+            prediction_range = axs[row, col].fill_between(
+                range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+                np.maximum(
+                    0.0,
+                    transform_kf_to_intrinsic(
+                        # TODO: indices
+                        self.ensemble_macrostate_mean[
+                            cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
+                        ]
+                        - np.sqrt(
+                            self.ensemble_macrostate_cov[
+                                cycle,
+                                (cycle + 1) * SAMPLE_INTERVAL :,
+                                len_state_vars + idx,
+                                len_state_vars + idx,
+                            ]
+                        ),
+                        index=len_state_vars + idx,
+                    ),
+                ),
+                transform_kf_to_intrinsic(
+                    # TODO: indices
+                    self.ensemble_macrostate_mean[
+                        cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
+                    ]
+                    + np.sqrt(
+                        self.ensemble_macrostate_cov[
+                            cycle,
+                            (cycle + 1) * SAMPLE_INTERVAL :,
+                            len_state_vars + idx,
+                            len_state_vars + idx,
+                        ]
+                    ),
+                    index=len_state_vars + idx,
+                ),
+                color="blue",
+                alpha=0.35,
+            )
+            axs[row, col].set_title(fix_title(param_name), loc="center", wrap=True)
+            axs[row, col].set_ylim(bottom=max(0.0, axs[row, col].get_ylim()[0]))
+
+        # remove axes on unused graphs
+        for idx in range(
+            len(variational_params),
+            graph_rows * graph_cols,
+        ):
+            row, col = divmod(idx, graph_cols)
+            axs[row, col].set_axis_off()
+
+        # place legend
+        if len(state_vars) < graph_rows * graph_cols:
+            legend_placement = axs[graph_rows - 1, graph_cols - 1]
+            legend_loc = "upper left"
+        else:
+            legend_placement = fig
+            legend_loc = "outside lower center"
+
+        legend_placement.legend(
+            [
+                true_value,
+                (past_estimate_center_line, past_estimate_range),
+                (prediction_center_line, prediction_range),
+            ],
+            [
+                true_value.get_label(),
+                past_estimate_center_line.get_label(),
+                prediction_center_line.get_label(),
+            ],
+            loc=legend_loc,
+        )
+        fig.suptitle("Parameter Projection")
+        fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-params.pdf")
+        plt.close(fig)
+
+
+def model_sigma_point_ensemble_from_helper(params: np.ndarray):
+    model_param_dict = default_params.copy()
+    for sample_component, parameter_name in zip(
+        params,
+        (init_only_params + variational_params),
+    ):
+        model_param_dict[parameter_name] = (
+            round(max(0, sample_component))
+            if isinstance(default_params[parameter_name], int)
+            else max(0.0, sample_component)
+        )
+    # create model for virtual patient
+    model = AnCockrellModel(**model_param_dict)
+    return model
+
+
+def model_sigma_point_ensemble_from(means: np.ndarray, covariances: np.ndarray):
+    """
+    Create an ensemble of models from a distribution. Uses init-only
+    and variational parameters
+
+    :param means:
+    :param covariances:
+    :return:
+    """
+    # make 100% sure of the covariance matrix
+    covariances = (covariances + covariances.T) / 2
+    min_diag = np.min(np.diag(covariances))
+    if min_diag < 1e-6:
+        covariances += (1e-6 - min_diag) * np.identity(covariances.shape[0])
+
+    # get principal axes
+    U, S, Vh = np.linalg.svd(covariances, full_matrices=True, compute_uv=True, hermitian=True)
+    axes = U * np.sqrt(S)
+
+    mdl_ensemble = [model_sigma_point_ensemble_from_helper(means)]
+    for axis in axes:
+        mdl_ensemble.append(model_sigma_point_ensemble_from_helper(means + axis))
+        mdl_ensemble.append(model_sigma_point_ensemble_from_helper(means - axis))
+
+    return mdl_ensemble
+
+
+def figure_gridlayout(num_vars: int):
+    # layout for graphing variables.
+    # Attempts to be mostly square, with possibly more rows than columns
+    graph_cols: Final[int] = int(np.floor(np.sqrt(num_vars)))
+    graph_rows: Final[int] = int(np.ceil(num_vars / graph_cols))
+    graph_figsize: Final[Tuple[float, float]] = (
+        1.8 * graph_rows,
+        1.8 * graph_cols,
+    )
+    return graph_rows, graph_cols, graph_figsize

@@ -8,7 +8,7 @@ from an_cockrell import AnCockrellModel
 from scipy.stats import multivariate_normal
 from tqdm import trange
 
-from consts import (
+from phkf_ac.consts import (
     UNIFIED_STATE_SPACE_DIMENSION,
     default_params,
     init_only_params,
@@ -16,8 +16,8 @@ from consts import (
     state_vars,
     variational_params,
 )
-from modify_epi_spatial import modify_model
-from util import model_macro_data
+from phkf_ac.modify_epi_spatial import modify_model
+from phkf_ac.util import model_macro_data
 
 ################################################################################
 

@@ -5,7 +5,7 @@ from an_cockrell import AnCockrellModel
 from matplotlib import colors
 from perlin_noise import PerlinNoise
 
-from consts import UNIFIED_STATE_SPACE_DIMENSION, state_vars, variational_params
+from phkf_ac.consts import UNIFIED_STATE_SPACE_DIMENSION, state_vars, variational_params
 
 ################################################################################
 

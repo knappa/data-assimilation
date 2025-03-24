@@ -1,6 +1,6 @@
-numpy~=1.26.4
-matplotlib~=3.8.3
-h5py~=3.10.0
+numpy>=1.26.4
+matplotlib>=3.8.3
+h5py>=3.10.0
 an_cockrell @ git+https://github.com/knappa/an-cockrell.git
 scipy~=1.15.0
 scikit-learn~=1.6.1
