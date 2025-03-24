@@ -219,6 +219,7 @@ class PhenotypeKFAnCockrell:
         :param observation_types: list of measured quantities
         :param measurements: values of measured quantities
         :param save_microstate_files: save projected/updated microstates
+        :param log: print diagnostic messages
         :return: None
         """
         assert len(observation_types) == len(measurements)
@@ -250,20 +251,18 @@ class PhenotypeKFAnCockrell:
         if log:
             print(f"Determining weights", end="")
 
-        time_inclusion_matrix = np.zeros((2017 * 41, delta_time * 41), dtype=np.float64)
-        for time_idx in range(self._current_time, observation_time):
-            print(41 * (self._current_time + time_idx), 41 * (self._current_time + time_idx + 1))
-            print(41 * time_idx, 41 * (time_idx + 1))
-            time_inclusion_matrix[
-                41 * (self._current_time + time_idx) : 41 * (self._current_time + time_idx + 1),
-                41 * time_idx : 41 * (time_idx + 1),
-            ] = np.identity(41)
-        restricted_time_pca_matrix = self.pca_matrix @ time_inclusion_matrix
+        trajectory_region = (
+            self.ensemble_macrostate.reshape(self.num_phenotypes, self.ensemble_size, -1)
+            - self.pca_center
+        ).reshape(self.num_phenotypes, self.ensemble_size, 2017, 40)
+        trajectory_region[:, :, : self._current_time, :] = 0
+        trajectory_region[:, :, observation_time:, :] = 0
         reduced_states = np.einsum(
             "ij,pmj->pmi",
-            restricted_time_pca_matrix,  # [3,41*dt]
-            self.ensemble_macrostate.reshape((self.num_phenotypes, self.ensemble_size, -1))
-            - self.pca_center,  # [p,m,t,s] -> [p,m,j]
+            self.pca_matrix,  # [3,UNIFIED_STATE_SPACE_DIMENSION*dt]
+            trajectory_region.reshape(
+                self.num_phenotypes, self.ensemble_size, -1
+            ),  # [p,m,t,s] -> [p,m,j]
         )
         log_weights = np.zeros(
             (self.num_phenotypes, self.ensemble_size),
