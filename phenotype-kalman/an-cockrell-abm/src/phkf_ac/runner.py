@@ -68,7 +68,7 @@ class PhenotypeKFAnCockrell:
     # noinspection PyUnresolvedReferences
     @observation_uncertainty_cov.default
     def observation_uncertainty_default(self):
-        return np.full(len(OBSERVABLES), 1.0, dtype=np.float64)
+        return np.full(UNIFIED_STATE_SPACE_DIMENSION, 0.1, dtype=np.float64)
 
     # dimensions: (phenotype, model)
     ensemble: List[List[AnCockrellModel]] = field(init=False, factory=list)
@@ -108,9 +108,16 @@ class PhenotypeKFAnCockrell:
         assert 1 <= len(self.observation_uncertainty_cov.shape) <= 2
         if len(self.observation_uncertainty_cov.shape) == 1:
             self.observation_uncertainty_cov = np.diag(self.observation_uncertainty_cov)
+
         assert (
-            self.observation_uncertainty_cov.shape[0] == self.observation_uncertainty_cov.shape[1]
-        )
+            self.observation_uncertainty_cov.shape[0]
+            == self.observation_uncertainty_cov.shape[1]
+        ), "observation uncertainty is not square!"
+
+        assert (
+                self.observation_uncertainty_cov.shape[0]
+                == UNIFIED_STATE_SPACE_DIMENSION
+        ), "observation uncertainty matrix is not the correct size"
 
         self.ensemble_size = 1 + 2 * UNIFIED_STATE_SPACE_DIMENSION
 
@@ -152,9 +159,11 @@ class PhenotypeKFAnCockrell:
         #  just be read from the existing data.)
         for phenotype_idx in range(self.num_phenotypes):
             self.ensemble.append(
-                model_sigma_point_ensemble_from(initialization_means, initialization_covs)
+                model_sigma_point_ensemble_from(
+                    initialization_means, initialization_covs, 1 + 2 * UNIFIED_STATE_SPACE_DIMENSION
+                )
             )
-            for model_idx in range(self.num_phenotypes):
+            for model_idx in range(self.ensemble_size):
                 self.ensemble_macrostate[phenotype_idx, model_idx, 0, :] = model_macro_data(
                     self.ensemble[phenotype_idx][model_idx]
                 )
@@ -230,8 +239,6 @@ class PhenotypeKFAnCockrell:
                 "Multiple same-time observations split between different function calls are unsupported"
             )
 
-        delta_time: int = observation_time - self._current_time
-
         if log:
             print(f"Projecting ensemble to t={observation_time}", flush=True)
 
@@ -251,6 +258,7 @@ class PhenotypeKFAnCockrell:
         if log:
             print(f"Determining weights", end="")
 
+        # TODO: figure out why self.ensemble_macrostate isn't fully filled out
         trajectory_region = (
             self.ensemble_macrostate.reshape(self.num_phenotypes, self.ensemble_size, -1)
             - self.pca_center
@@ -264,6 +272,7 @@ class PhenotypeKFAnCockrell:
                 self.num_phenotypes, self.ensemble_size, -1
             ),  # [p,m,t,s] -> [p,m,j]
         )
+        # print(f"{reduced_states.shape=}") # (4,81,3)
         log_weights = np.zeros(
             (self.num_phenotypes, self.ensemble_size),
             dtype=np.float64,
@@ -271,32 +280,47 @@ class PhenotypeKFAnCockrell:
         # TODO: unscented weights?
         for phenotype_idx in range(self.num_phenotypes):
             mean_difference_vec = reduced_states - self.phenotype_weight_means[phenotype_idx]
-            try:
-                temp = np.linalg.lstsq(
-                    self.phenotype_weight_covs[phenotype_idx],
-                    mean_difference_vec,
-                )[0]
-            except LinAlgError:
-                temp = (
-                    scipy.linalg.pinvh(self.phenotype_weight_covs[phenotype_idx], return_rank=False)
-                    @ mean_difference_vec
+            for ensemble_idx in range(2 * UNIFIED_STATE_SPACE_DIMENSION + 1):
+                try:
+                    temp = np.linalg.lstsq(
+                        self.phenotype_weight_covs[phenotype_idx],
+                        mean_difference_vec[phenotype_idx, ensemble_idx, :],
+                    )[0]
+                except LinAlgError:
+                    temp = (
+                        scipy.linalg.pinvh(
+                            self.phenotype_weight_covs[phenotype_idx], return_rank=False
+                        )
+                        @ mean_difference_vec[phenotype_idx, ensemble_idx, :]
+                    )
+                log_weights[phenotype_idx, ensemble_idx] = (
+                    -(
+                        mean_difference_vec[phenotype_idx, ensemble_idx, :] @ temp
+                        + slogdet(self.phenotype_weight_covs[phenotype_idx])[1]
+                    )
+                    / 2.0
                 )
-            log_weights[phenotype_idx, :] = (
-                -(
-                    mean_difference_vec @ temp
-                    + slogdet(self.phenotype_weight_covs[phenotype_idx])[1]
-                )
-                / 2.0
+
+            # normalize weights
+            log_weights[phenotype_idx, :] -= logsumexp(log_weights[phenotype_idx, :])
+            # we don't want to weights to become excessively small as this can give a singular estimate
+            # (can happen when one trajectory looks like a _really_ good match) so we cap and renormalize
+            log_weights[phenotype_idx, :] = np.maximum(
+                log_weights[phenotype_idx, :], -2 * np.log(self.ensemble_size)
             )
-        # normalize weights
-        for ensemble_idx in range(log_weights.shape[1]):
-            log_weights[:, ensemble_idx] -= logsumexp(log_weights[:, ensemble_idx])
+            log_weights[phenotype_idx, :] -= logsumexp(log_weights[phenotype_idx, :])
 
         # compute weighted per-phenotype and per-time mean and covariance
         for phenotype_idx in range(self.num_phenotypes):
             weights = np.exp(log_weights[phenotype_idx, :])
-            self.ensemble_macrostate_mean[phenotype_idx, :, :] = np.average(
-                self.ensemble_macrostate[phenotype_idx, :, :, :], weights=weights, axis=0
+            self.ensemble_macrostate_mean[
+                phenotype_idx, self._current_time : observation_time, :
+            ] = np.average(
+                self.ensemble_macrostate[
+                    phenotype_idx, :, self._current_time : observation_time, :
+                ],
+                weights=weights,
+                axis=0,
             )
             for time_idx in range(self._current_time + 1, observation_time + 1):
                 self.ensemble_macrostate_cov[phenotype_idx, time_idx, :, :] = np.cov(
@@ -386,8 +410,12 @@ class PhenotypeKFAnCockrell:
             )
             principal_axes = U * np.sqrt(S)  # TODO: proper weights
             for axis_idx, axis in enumerate(principal_axes):
-                ensemble_target_locs[phenotype_idx, 2 * axis + 1, :] = axis
-                ensemble_target_locs[phenotype_idx, 2 * axis + 2, :] = -axis
+                ensemble_target_locs[phenotype_idx, 2 * axis_idx + 1, :] = (
+                    axis + self.ensemble_macrostate_mean[phenotype_idx, observation_time]
+                )
+                ensemble_target_locs[phenotype_idx, 2 * axis_idx + 2, :] = (
+                    -axis + self.ensemble_macrostate_mean[phenotype_idx, observation_time]
+                )
 
             model_to_sample_pairing[phenotype_idx, :] = gale_shapely_matching(
                 new_sample=ensemble_target_locs[phenotype_idx],
@@ -754,13 +782,14 @@ def model_sigma_point_ensemble_from_helper(params: np.ndarray):
     return model
 
 
-def model_sigma_point_ensemble_from(means: np.ndarray, covariances: np.ndarray):
+def model_sigma_point_ensemble_from(means: np.ndarray, covariances: np.ndarray, count: int):
     """
     Create an ensemble of models from a distribution. Uses init-only
     and variational parameters
 
     :param means:
     :param covariances:
+    :param count: number of ensemble members
     :return:
     """
     # make 100% sure of the covariance matrix
@@ -777,6 +806,21 @@ def model_sigma_point_ensemble_from(means: np.ndarray, covariances: np.ndarray):
     for axis in axes:
         mdl_ensemble.append(model_sigma_point_ensemble_from_helper(means + axis))
         mdl_ensemble.append(model_sigma_point_ensemble_from_helper(means - axis))
+
+    if len(mdl_ensemble) >= count:
+        return mdl_ensemble[:count]
+
+    # fill out the rest of the ensemble
+    while len(mdl_ensemble) < count:
+        offset = np.random.multivariate_normal(
+            mean=np.zeros_like(axes[0]), cov=np.identity(axes.shape[0])
+        )
+        # don't let it get _too_ big/weird
+        norm_offset = np.linalg.norm(offset)
+        if norm_offset > 1:
+            offset /= norm_offset
+
+        mdl_ensemble.append(model_sigma_point_ensemble_from_helper(means + axes @ offset))
 
     return mdl_ensemble
 

@@ -234,7 +234,7 @@ def main_cli():
         (init_only_params + variational_params),
     ):
         vp_init_params[param_name] = (
-            round(sample_component)
+            int(round(sample_component))
             if isinstance(default_params[param_name], int)
             else sample_component
         )
@@ -326,408 +326,419 @@ def main_cli():
     if log:
         print(" (Finished)")
 
-    for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
+    with tqdm(range(NUM_CYCLES), desc="cycle") as t:
+        for cycle in t:
 
-        if log:
-            print("Advancing ensemble", end="")
+            t.set_postfix_str("Advancing ensemble")
 
-        # advance ensemble of models
-        time += SAMPLE_INTERVAL
-        ensemble.project_ensemble_to(t=time, update_ensemble=True)
+            # advance ensemble of models
+            time += SAMPLE_INTERVAL
+            ensemble.project_ensemble_to(t=time, update_ensemble=True)
 
-        if PREDICT != "to-kf-update":
-            if PREDICT == "to-next-kf-update":
-                final_time = time + SAMPLE_INTERVAL + 1
-            else:
-                # PREDICT == "to-end"
-                final_time = TIME_SPAN + 1
-            ensemble.project_ensemble_to(t=final_time, update_ensemble=False)
+            if PREDICT != "to-kf-update":
+                if PREDICT == "to-next-kf-update":
+                    final_time = time + SAMPLE_INTERVAL + 1
+                else:
+                    # PREDICT == "to-end"
+                    final_time = TIME_SPAN + 1
+                ensemble.project_ensemble_to(t=final_time, update_ensemble=False)
 
-        if log:
-            print(" (Finished)")
+            t.set_postfix_str("")
 
-        ################################################################################
-        # plot projection of state variables and parameters
+            ################################################################################
+            # plot projection of state variables and parameters
 
-        if GRAPHS:
-            ensemble.plot_state_vars(TIME_SPAN, vp_trajectory, cycle, SAMPLE_INTERVAL, FILE_PREFIX)
-            ensemble.plot_parameters(
-                TIME_SPAN, cycle, SAMPLE_INTERVAL, FILE_PREFIX, vp_init_params=vp_init_params
+            if GRAPHS:
+                t.set_postfix_str("Plotting")
+                ensemble.plot_state_vars(
+                    TIME_SPAN, vp_trajectory, cycle, SAMPLE_INTERVAL, FILE_PREFIX
+                )
+                ensemble.plot_parameters(
+                    TIME_SPAN, cycle, SAMPLE_INTERVAL, FILE_PREFIX, vp_init_params=vp_init_params
+                )
+                t.set_postfix_str("")
+
+            ################################################################################
+            # Kalman filter
+
+            t.set_postfix_str("Kalman Filter update")
+
+            ensemble.kf_update(
+                observation_time=time,
+                observation_types=OBSERVABLE_VAR_NAMES,
+                measurements=np.array(
+                    [
+                        transform_intrinsic_to_kf(
+                            vp_trajectory[time, state_var_indices[obs_name]],
+                            index=state_var_indices[obs_name],
+                        )
+                        for obs_name in OBSERVABLE_VAR_NAMES
+                    ],
+                    dtype=np.float64,
+                ),
+                save_microstate_files=False,
             )
 
-        ################################################################################
-        # Kalman filter
+            t.set_postfix_str("Kalman Filter update")
 
-        ensemble.kf_update(
-            observation_time=time,
-            observation_types=OBSERVABLE_VAR_NAMES,
-            measurements=np.array(
-                [
-                    transform_intrinsic_to_kf(
-                        vp_trajectory[time, state_var_indices[obs_name]],
-                        index=state_var_indices[obs_name],
-                    )
-                    for obs_name in OBSERVABLE_VAR_NAMES
-                ],
-                dtype=np.float64,
-            ),
-            save_microstate_files=False,
-        )
+            ################################################################################
+            # plot projection of state variables and parameters, post KF update
 
-        ################################################################################
-        # plot projection of state variables and parameters, post KF update
+            if GRAPHS:
+                t.set_postfix_str("Plotting")
+                ensemble.plot_state_vars(
+                    TIME_SPAN, vp_trajectory, cycle, SAMPLE_INTERVAL, FILE_PREFIX
+                )
+                ensemble.plot_parameters(
+                    TIME_SPAN, cycle, SAMPLE_INTERVAL, FILE_PREFIX, vp_init_params=vp_init_params
+                )
+                t.set_postfix_str("")
 
-        if GRAPHS:
-            ensemble.plot_state_vars(TIME_SPAN, vp_trajectory, cycle, SAMPLE_INTERVAL, FILE_PREFIX)
-            ensemble.plot_parameters(
-                TIME_SPAN, cycle, SAMPLE_INTERVAL, FILE_PREFIX, vp_init_params=vp_init_params
-            )
-
-        # ################################################################################
-        # # plot kalman update of state variables
-        #
-        # if GRAPHS:
-        #     for cycle in range(NUM_CYCLES - 1):
-        #         fig, axs = plt.subplots(
-        #             nrows=state_var_graphs_rows,
-        #             ncols=state_var_graphs_cols,
-        #             figsize=state_var_graphs_figsize,
-        #             sharex=True,
-        #             sharey=False,
-        #             layout="constrained",
-        #         )
-        #         for idx, state_var_name in enumerate(state_vars):
-        #             row, col = divmod(idx, state_var_graphs_cols)
-        #
-        #             (true_value,) = axs[row, col].plot(
-        #                 range(TIME_SPAN + 1),
-        #                 vp_trajectory[:, idx],
-        #                 label="true value",
-        #                 color="black",
-        #             )
-        #
-        #             (past_est_center_line,) = axs[row, col].plot(
-        #                 range((cycle + 1) * SAMPLE_INTERVAL),
-        #                 transform_kf_to_intrinsic(
-        #                     mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx], index=idx
-        #                 ),
-        #                 color="green",
-        #                 label="estimate of past",
-        #             )
-        #
-        #             past_est_range = axs[row, col].fill_between(
-        #                 range((cycle + 1) * SAMPLE_INTERVAL),
-        #                 np.maximum(
-        #                     0.0,
-        #                     transform_kf_to_intrinsic(
-        #                         mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
-        #                         - np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
-        #                         index=idx,
-        #                     ),
-        #                 ),
-        #                 transform_kf_to_intrinsic(
-        #                     mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
-        #                     + np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
-        #                     index=idx,
-        #                 ),
-        #                 color="green",
-        #                 alpha=0.35,
-        #             )
-        #
-        #             (future_est_before_update_center_line,) = axs[row, col].plot(
-        #                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-        #                 transform_kf_to_intrinsic(
-        #                     mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx], index=idx
-        #                 ),
-        #                 color="#d5b60a",
-        #                 label="previous future estimate",
-        #             )
-        #             future_est_before_update_range = axs[row, col].fill_between(
-        #                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-        #                 np.maximum(
-        #                     0.0,
-        #                     transform_kf_to_intrinsic(
-        #                         mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-        #                         - np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-        #                         index=idx,
-        #                     ),
-        #                 ),
-        #                 transform_kf_to_intrinsic(
-        #                     mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-        #                     + np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-        #                     index=idx,
-        #                 ),
-        #                 color="#d5b60a",
-        #                 alpha=0.35,
-        #             )
-        #
-        #             (future_est_after_update_center_line,) = axs[row, col].plot(
-        #                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-        #                 transform_kf_to_intrinsic(
-        #                     mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx], index=idx
-        #                 ),
-        #                 label="updated future estimate",
-        #                 color="blue",
-        #             )
-        #
-        #             future_est_after_update_range = axs[row, col].fill_between(
-        #                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-        #                 np.maximum(
-        #                     0.0,
-        #                     transform_kf_to_intrinsic(
-        #                         mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-        #                         - np.sqrt(
-        #                             cov_matrix[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]
-        #                         ),
-        #                         index=idx,
-        #                     ),
-        #                 ),
-        #                 transform_kf_to_intrinsic(
-        #                     mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-        #                     + np.sqrt(cov_matrix[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
-        #                     index=idx,
-        #                 ),
-        #                 color="blue",
-        #                 alpha=0.35,
-        #             )
-        #             axs[row, col].set_title(fix_title(state_var_name), loc="left", wrap=True)
-        #             axs[row, col].set_ylim(bottom=max(0.0, axs[row, col].get_ylim()[0]))
-        #         # remove axes on unused graphs
-        #         for idx in range(
-        #             len(state_vars),
-        #             state_var_graphs_rows * state_var_graphs_cols,
-        #         ):
-        #             row, col = divmod(idx, state_var_graphs_cols)
-        #             axs[row, col].set_axis_off()
-        #
-        #         # place legend
-        #         if len(state_vars) < state_var_graphs_rows * state_var_graphs_cols:
-        #             legend_placement = axs[state_var_graphs_rows - 1, state_var_graphs_cols - 1]
-        #             legend_loc = "upper left"
-        #         else:
-        #             legend_placement = fig
-        #             legend_loc = "outside lower center"
-        #
-        #         # noinspection PyUnboundLocalVariable
-        #         legend_placement.legend(
-        #             [
-        #                 true_value,
-        #                 (past_est_center_line, past_est_range),
-        #                 (future_est_before_update_center_line, future_est_before_update_range),
-        #                 (future_est_after_update_center_line, future_est_after_update_range),
-        #             ],
-        #             [
-        #                 true_value.get_label(),
-        #                 past_est_center_line.get_label(),
-        #                 future_est_before_update_center_line.get_label(),
-        #                 future_est_after_update_center_line.get_label(),
-        #             ],
-        #             loc=legend_loc,
-        #         )
-        #         fig.suptitle("State Projection", ha="left")
-        #         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-state-kfupd.pdf")
-        #         plt.close(fig)
-        #
-        # ################################################################################
-        # # plot kalman update of parameters
-        #
-        # if GRAPHS:
-        #     len_state_vars = len(state_vars)
-        #     for cycle in range(NUM_CYCLES - 1):
-        #         fig, axs = plt.subplots(
-        #             nrows=variational_params_graphs_rows,
-        #             ncols=variational_params_graphs_cols,
-        #             figsize=variational_params_graphs_figsize,
-        #             sharex=True,
-        #             sharey=False,
-        #             layout="constrained",
-        #         )
-        #         for idx, param_name in enumerate(variational_params):
-        #             row, col = divmod(idx, variational_params_graphs_cols)
-        #
-        #             if param_name in vp_init_params:
-        #                 (true_value,) = axs[row, col].plot(
-        #                     [0, TIME_SPAN + 1],
-        #                     [vp_init_params[param_name]] * 2,
-        #                     label="true value",
-        #                     color="black",
-        #                 )
-        #
-        #             (past_est_center_line,) = axs[row, col].plot(
-        #                 range((cycle + 1) * SAMPLE_INTERVAL),
-        #                 transform_kf_to_intrinsic(
-        #                     mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx],
-        #                     index=len_state_vars + idx,
-        #                 ),
-        #                 label="estimate of past",
-        #                 color="green",
-        #             )
-        #
-        #             past_est_range = axs[row, col].fill_between(
-        #                 range((cycle + 1) * SAMPLE_INTERVAL),
-        #                 np.maximum(
-        #                     0.0,
-        #                     transform_kf_to_intrinsic(
-        #                         mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx]
-        #                         - np.sqrt(
-        #                             cov_matrix[
-        #                                 cycle,
-        #                                 : (cycle + 1) * SAMPLE_INTERVAL,
-        #                                 len_state_vars + idx,
-        #                                 len_state_vars + idx,
-        #                             ]
-        #                         ),
-        #                         index=len_state_vars + idx,
-        #                     ),
-        #                 ),
-        #                 transform_kf_to_intrinsic(
-        #                     mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx]
-        #                     + np.sqrt(
-        #                         cov_matrix[
-        #                             cycle,
-        #                             : (cycle + 1) * SAMPLE_INTERVAL,
-        #                             len_state_vars + idx,
-        #                             len_state_vars + idx,
-        #                         ]
-        #                     ),
-        #                     index=len_state_vars + idx,
-        #                 ),
-        #                 color="green",
-        #                 alpha=0.35,
-        #             )
-        #
-        #             (future_est_before_update_center_line,) = axs[row, col].plot(
-        #                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-        #                 transform_kf_to_intrinsic(
-        #                     mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx],
-        #                     index=len_state_vars + idx,
-        #                 ),
-        #                 label="old estimate",
-        #                 color="#d5b60a",
-        #             )
-        #
-        #             future_est_before_update_range = axs[row, col].fill_between(
-        #                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-        #                 np.maximum(
-        #                     0.0,
-        #                     transform_kf_to_intrinsic(
-        #                         mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx]
-        #                         - np.sqrt(
-        #                             cov_matrix[
-        #                                 cycle,
-        #                                 (cycle + 1) * SAMPLE_INTERVAL :,
-        #                                 len_state_vars + idx,
-        #                                 len_state_vars + idx,
-        #                             ]
-        #                         ),
-        #                         index=len_state_vars + idx,
-        #                     ),
-        #                 ),
-        #                 transform_kf_to_intrinsic(
-        #                     mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx]
-        #                     + np.sqrt(
-        #                         cov_matrix[
-        #                             cycle,
-        #                             (cycle + 1) * SAMPLE_INTERVAL :,
-        #                             len_state_vars + idx,
-        #                             len_state_vars + idx,
-        #                         ]
-        #                     ),
-        #                     index=len_state_vars + idx,
-        #                 ),
-        #                 color="#d5b60a",
-        #                 alpha=0.35,
-        #             )
-        #
-        #             (future_est_after_update_center_line,) = axs[row, col].plot(
-        #                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-        #                 transform_kf_to_intrinsic(
-        #                     mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx],
-        #                     index=len_state_vars + idx,
-        #                 ),
-        #                 label="updated estimate",
-        #                 color="blue",
-        #             )
-        #
-        #             future_est_after_update_range = axs[row, col].fill_between(
-        #                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-        #                 np.maximum(
-        #                     0.0,
-        #                     transform_kf_to_intrinsic(
-        #                         mean_vec[
-        #                             cycle + 1,
-        #                             (cycle + 1) * SAMPLE_INTERVAL :,
-        #                             len_state_vars + idx,
-        #                         ]
-        #                         - np.sqrt(
-        #                             cov_matrix[
-        #                                 cycle + 1,
-        #                                 (cycle + 1) * SAMPLE_INTERVAL :,
-        #                                 len_state_vars + idx,
-        #                                 len_state_vars + idx,
-        #                             ]
-        #                         ),
-        #                         index=len_state_vars + idx,
-        #                     ),
-        #                 ),
-        #                 transform_kf_to_intrinsic(
-        #                     mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx]
-        #                     + np.sqrt(
-        #                         cov_matrix[
-        #                             cycle + 1,
-        #                             (cycle + 1) * SAMPLE_INTERVAL :,
-        #                             len_state_vars + idx,
-        #                             len_state_vars + idx,
-        #                         ]
-        #                     ),
-        #                     index=len_state_vars + idx,
-        #                 ),
-        #                 color="blue",
-        #                 alpha=0.35,
-        #                 label="new future cone of uncertainty",
-        #             )
-        #             axs[row, col].set_title(fix_title(param_name), loc="center", wrap=True)
-        #             axs[row, col].set_ylim(bottom=max(0.0, axs[row, col].get_ylim()[0]))
-        #
-        #         # remove axes on unused graphs
-        #         for idx in range(
-        #             len(variational_params),
-        #             variational_params_graphs_rows * variational_params_graphs_cols,
-        #         ):
-        #             row, col = divmod(idx, variational_params_graphs_cols)
-        #             axs[row, col].set_axis_off()
-        #
-        #         # place the legend
-        #         if (
-        #             len(variational_params)
-        #             < variational_params_graphs_rows * variational_params_graphs_cols
-        #         ):
-        #             legend_placement = axs[
-        #                 variational_params_graphs_rows - 1, variational_params_graphs_cols - 1
-        #             ]
-        #             legend_loc = "upper left"
-        #         else:
-        #             legend_placement = fig
-        #             legend_loc = "outside lower center"
-        #
-        #         legend_placement.legend(
-        #             [
-        #                 true_value,
-        #                 (past_est_center_line, past_est_range),
-        #                 (future_est_before_update_center_line, future_est_before_update_range),
-        #                 (future_est_after_update_center_line, future_est_after_update_range),
-        #             ],
-        #             [
-        #                 true_value.get_label(),
-        #                 past_est_center_line.get_label(),
-        #                 future_est_before_update_center_line.get_label(),
-        #                 future_est_after_update_center_line.get_label(),
-        #             ],
-        #             loc=legend_loc,
-        #         )
-        #         fig.suptitle("Parameter Projection", x=0, ha="left")
-        #         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-params-kfupd.pdf")
-        #         plt.close(fig)
+            # ################################################################################
+            # # plot kalman update of state variables
+            #
+            # if GRAPHS:
+            #     for cycle in range(NUM_CYCLES - 1):
+            #         fig, axs = plt.subplots(
+            #             nrows=state_var_graphs_rows,
+            #             ncols=state_var_graphs_cols,
+            #             figsize=state_var_graphs_figsize,
+            #             sharex=True,
+            #             sharey=False,
+            #             layout="constrained",
+            #         )
+            #         for idx, state_var_name in enumerate(state_vars):
+            #             row, col = divmod(idx, state_var_graphs_cols)
+            #
+            #             (true_value,) = axs[row, col].plot(
+            #                 range(TIME_SPAN + 1),
+            #                 vp_trajectory[:, idx],
+            #                 label="true value",
+            #                 color="black",
+            #             )
+            #
+            #             (past_est_center_line,) = axs[row, col].plot(
+            #                 range((cycle + 1) * SAMPLE_INTERVAL),
+            #                 transform_kf_to_intrinsic(
+            #                     mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx], index=idx
+            #                 ),
+            #                 color="green",
+            #                 label="estimate of past",
+            #             )
+            #
+            #             past_est_range = axs[row, col].fill_between(
+            #                 range((cycle + 1) * SAMPLE_INTERVAL),
+            #                 np.maximum(
+            #                     0.0,
+            #                     transform_kf_to_intrinsic(
+            #                         mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
+            #                         - np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
+            #                         index=idx,
+            #                     ),
+            #                 ),
+            #                 transform_kf_to_intrinsic(
+            #                     mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
+            #                     + np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
+            #                     index=idx,
+            #                 ),
+            #                 color="green",
+            #                 alpha=0.35,
+            #             )
+            #
+            #             (future_est_before_update_center_line,) = axs[row, col].plot(
+            #                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+            #                 transform_kf_to_intrinsic(
+            #                     mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx], index=idx
+            #                 ),
+            #                 color="#d5b60a",
+            #                 label="previous future estimate",
+            #             )
+            #             future_est_before_update_range = axs[row, col].fill_between(
+            #                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+            #                 np.maximum(
+            #                     0.0,
+            #                     transform_kf_to_intrinsic(
+            #                         mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
+            #                         - np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
+            #                         index=idx,
+            #                     ),
+            #                 ),
+            #                 transform_kf_to_intrinsic(
+            #                     mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
+            #                     + np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
+            #                     index=idx,
+            #                 ),
+            #                 color="#d5b60a",
+            #                 alpha=0.35,
+            #             )
+            #
+            #             (future_est_after_update_center_line,) = axs[row, col].plot(
+            #                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+            #                 transform_kf_to_intrinsic(
+            #                     mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx], index=idx
+            #                 ),
+            #                 label="updated future estimate",
+            #                 color="blue",
+            #             )
+            #
+            #             future_est_after_update_range = axs[row, col].fill_between(
+            #                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+            #                 np.maximum(
+            #                     0.0,
+            #                     transform_kf_to_intrinsic(
+            #                         mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx]
+            #                         - np.sqrt(
+            #                             cov_matrix[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]
+            #                         ),
+            #                         index=idx,
+            #                     ),
+            #                 ),
+            #                 transform_kf_to_intrinsic(
+            #                     mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx]
+            #                     + np.sqrt(cov_matrix[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
+            #                     index=idx,
+            #                 ),
+            #                 color="blue",
+            #                 alpha=0.35,
+            #             )
+            #             axs[row, col].set_title(fix_title(state_var_name), loc="left", wrap=True)
+            #             axs[row, col].set_ylim(bottom=max(0.0, axs[row, col].get_ylim()[0]))
+            #         # remove axes on unused graphs
+            #         for idx in range(
+            #             len(state_vars),
+            #             state_var_graphs_rows * state_var_graphs_cols,
+            #         ):
+            #             row, col = divmod(idx, state_var_graphs_cols)
+            #             axs[row, col].set_axis_off()
+            #
+            #         # place legend
+            #         if len(state_vars) < state_var_graphs_rows * state_var_graphs_cols:
+            #             legend_placement = axs[state_var_graphs_rows - 1, state_var_graphs_cols - 1]
+            #             legend_loc = "upper left"
+            #         else:
+            #             legend_placement = fig
+            #             legend_loc = "outside lower center"
+            #
+            #         # noinspection PyUnboundLocalVariable
+            #         legend_placement.legend(
+            #             [
+            #                 true_value,
+            #                 (past_est_center_line, past_est_range),
+            #                 (future_est_before_update_center_line, future_est_before_update_range),
+            #                 (future_est_after_update_center_line, future_est_after_update_range),
+            #             ],
+            #             [
+            #                 true_value.get_label(),
+            #                 past_est_center_line.get_label(),
+            #                 future_est_before_update_center_line.get_label(),
+            #                 future_est_after_update_center_line.get_label(),
+            #             ],
+            #             loc=legend_loc,
+            #         )
+            #         fig.suptitle("State Projection", ha="left")
+            #         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-state-kfupd.pdf")
+            #         plt.close(fig)
+            #
+            # ################################################################################
+            # # plot kalman update of parameters
+            #
+            # if GRAPHS:
+            #     len_state_vars = len(state_vars)
+            #     for cycle in range(NUM_CYCLES - 1):
+            #         fig, axs = plt.subplots(
+            #             nrows=variational_params_graphs_rows,
+            #             ncols=variational_params_graphs_cols,
+            #             figsize=variational_params_graphs_figsize,
+            #             sharex=True,
+            #             sharey=False,
+            #             layout="constrained",
+            #         )
+            #         for idx, param_name in enumerate(variational_params):
+            #             row, col = divmod(idx, variational_params_graphs_cols)
+            #
+            #             if param_name in vp_init_params:
+            #                 (true_value,) = axs[row, col].plot(
+            #                     [0, TIME_SPAN + 1],
+            #                     [vp_init_params[param_name]] * 2,
+            #                     label="true value",
+            #                     color="black",
+            #                 )
+            #
+            #             (past_est_center_line,) = axs[row, col].plot(
+            #                 range((cycle + 1) * SAMPLE_INTERVAL),
+            #                 transform_kf_to_intrinsic(
+            #                     mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx],
+            #                     index=len_state_vars + idx,
+            #                 ),
+            #                 label="estimate of past",
+            #                 color="green",
+            #             )
+            #
+            #             past_est_range = axs[row, col].fill_between(
+            #                 range((cycle + 1) * SAMPLE_INTERVAL),
+            #                 np.maximum(
+            #                     0.0,
+            #                     transform_kf_to_intrinsic(
+            #                         mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx]
+            #                         - np.sqrt(
+            #                             cov_matrix[
+            #                                 cycle,
+            #                                 : (cycle + 1) * SAMPLE_INTERVAL,
+            #                                 len_state_vars + idx,
+            #                                 len_state_vars + idx,
+            #                             ]
+            #                         ),
+            #                         index=len_state_vars + idx,
+            #                     ),
+            #                 ),
+            #                 transform_kf_to_intrinsic(
+            #                     mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx]
+            #                     + np.sqrt(
+            #                         cov_matrix[
+            #                             cycle,
+            #                             : (cycle + 1) * SAMPLE_INTERVAL,
+            #                             len_state_vars + idx,
+            #                             len_state_vars + idx,
+            #                         ]
+            #                     ),
+            #                     index=len_state_vars + idx,
+            #                 ),
+            #                 color="green",
+            #                 alpha=0.35,
+            #             )
+            #
+            #             (future_est_before_update_center_line,) = axs[row, col].plot(
+            #                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+            #                 transform_kf_to_intrinsic(
+            #                     mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx],
+            #                     index=len_state_vars + idx,
+            #                 ),
+            #                 label="old estimate",
+            #                 color="#d5b60a",
+            #             )
+            #
+            #             future_est_before_update_range = axs[row, col].fill_between(
+            #                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+            #                 np.maximum(
+            #                     0.0,
+            #                     transform_kf_to_intrinsic(
+            #                         mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx]
+            #                         - np.sqrt(
+            #                             cov_matrix[
+            #                                 cycle,
+            #                                 (cycle + 1) * SAMPLE_INTERVAL :,
+            #                                 len_state_vars + idx,
+            #                                 len_state_vars + idx,
+            #                             ]
+            #                         ),
+            #                         index=len_state_vars + idx,
+            #                     ),
+            #                 ),
+            #                 transform_kf_to_intrinsic(
+            #                     mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx]
+            #                     + np.sqrt(
+            #                         cov_matrix[
+            #                             cycle,
+            #                             (cycle + 1) * SAMPLE_INTERVAL :,
+            #                             len_state_vars + idx,
+            #                             len_state_vars + idx,
+            #                         ]
+            #                     ),
+            #                     index=len_state_vars + idx,
+            #                 ),
+            #                 color="#d5b60a",
+            #                 alpha=0.35,
+            #             )
+            #
+            #             (future_est_after_update_center_line,) = axs[row, col].plot(
+            #                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+            #                 transform_kf_to_intrinsic(
+            #                     mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx],
+            #                     index=len_state_vars + idx,
+            #                 ),
+            #                 label="updated estimate",
+            #                 color="blue",
+            #             )
+            #
+            #             future_est_after_update_range = axs[row, col].fill_between(
+            #                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
+            #                 np.maximum(
+            #                     0.0,
+            #                     transform_kf_to_intrinsic(
+            #                         mean_vec[
+            #                             cycle + 1,
+            #                             (cycle + 1) * SAMPLE_INTERVAL :,
+            #                             len_state_vars + idx,
+            #                         ]
+            #                         - np.sqrt(
+            #                             cov_matrix[
+            #                                 cycle + 1,
+            #                                 (cycle + 1) * SAMPLE_INTERVAL :,
+            #                                 len_state_vars + idx,
+            #                                 len_state_vars + idx,
+            #                             ]
+            #                         ),
+            #                         index=len_state_vars + idx,
+            #                     ),
+            #                 ),
+            #                 transform_kf_to_intrinsic(
+            #                     mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx]
+            #                     + np.sqrt(
+            #                         cov_matrix[
+            #                             cycle + 1,
+            #                             (cycle + 1) * SAMPLE_INTERVAL :,
+            #                             len_state_vars + idx,
+            #                             len_state_vars + idx,
+            #                         ]
+            #                     ),
+            #                     index=len_state_vars + idx,
+            #                 ),
+            #                 color="blue",
+            #                 alpha=0.35,
+            #                 label="new future cone of uncertainty",
+            #             )
+            #             axs[row, col].set_title(fix_title(param_name), loc="center", wrap=True)
+            #             axs[row, col].set_ylim(bottom=max(0.0, axs[row, col].get_ylim()[0]))
+            #
+            #         # remove axes on unused graphs
+            #         for idx in range(
+            #             len(variational_params),
+            #             variational_params_graphs_rows * variational_params_graphs_cols,
+            #         ):
+            #             row, col = divmod(idx, variational_params_graphs_cols)
+            #             axs[row, col].set_axis_off()
+            #
+            #         # place the legend
+            #         if (
+            #             len(variational_params)
+            #             < variational_params_graphs_rows * variational_params_graphs_cols
+            #         ):
+            #             legend_placement = axs[
+            #                 variational_params_graphs_rows - 1, variational_params_graphs_cols - 1
+            #             ]
+            #             legend_loc = "upper left"
+            #         else:
+            #             legend_placement = fig
+            #             legend_loc = "outside lower center"
+            #
+            #         legend_placement.legend(
+            #             [
+            #                 true_value,
+            #                 (past_est_center_line, past_est_range),
+            #                 (future_est_before_update_center_line, future_est_before_update_range),
+            #                 (future_est_after_update_center_line, future_est_after_update_range),
+            #             ],
+            #             [
+            #                 true_value.get_label(),
+            #                 past_est_center_line.get_label(),
+            #                 future_est_before_update_center_line.get_label(),
+            #                 future_est_after_update_center_line.get_label(),
+            #             ],
+            #             loc=legend_loc,
+            #         )
+            #         fig.suptitle("Parameter Projection", x=0, ha="left")
+            #         fig.savefig(FILE_PREFIX + f"cycle-{cycle:03}-params-kfupd.pdf")
+            #         plt.close(fig)
 
     ################################################################################
     # calculate surprisal information
