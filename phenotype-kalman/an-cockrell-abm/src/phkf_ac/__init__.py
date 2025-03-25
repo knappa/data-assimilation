@@ -305,6 +305,8 @@ def main_cli():
         phenotype_weight_means=phenotype_weight_means,
         phenotype_weight_covs=phenotype_weight_covs,
         model_modification_algorithm=modify_model,
+        transform_intrinsic_to_kf=transform_intrinsic_to_kf,
+        transform_kf_to_intrinsic=transform_kf_to_intrinsic,
     )
 
     if log:

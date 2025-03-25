@@ -9,7 +9,6 @@ from numpy.linalg import LinAlgError
 from scipy.special import logsumexp
 
 from phkf_ac.consts import (
-    OBSERVABLES,
     UNIFIED_STATE_SPACE_DIMENSION,
     default_params,
     init_only_params,
@@ -17,7 +16,6 @@ from phkf_ac.consts import (
     state_vars,
     variational_params,
 )
-from phkf_ac.transform import transform_intrinsic_to_kf, transform_kf_to_intrinsic
 from phkf_ac.util import gale_shapely_matching, model_macro_data, slogdet
 
 
@@ -43,8 +41,8 @@ class PhenotypeKFAnCockrell:
     num_phenotypes: int = field(init=True)
 
     transformed: bool = field(init=True, default=False)
-    transform_intrinsic_to_kf: Optional[Callable] = field(init=True, default=None)
-    transform_kf_to_intrinsic: Optional[Callable] = field(init=True, default=None)
+    transform_intrinsic_to_kf: Optional[Callable] = field(init=True)
+    transform_kf_to_intrinsic: Optional[Callable] = field(init=True)
 
     # PCA from 2017*41 dimensions to 3 by matrix C (3,2017*41) with center m (2017*41,)
     # then each phenotype_i from gaussian with mean m_i (3,) and cov P_i (3,3)
@@ -110,13 +108,11 @@ class PhenotypeKFAnCockrell:
             self.observation_uncertainty_cov = np.diag(self.observation_uncertainty_cov)
 
         assert (
-            self.observation_uncertainty_cov.shape[0]
-            == self.observation_uncertainty_cov.shape[1]
+            self.observation_uncertainty_cov.shape[0] == self.observation_uncertainty_cov.shape[1]
         ), "observation uncertainty is not square!"
 
         assert (
-                self.observation_uncertainty_cov.shape[0]
-                == UNIFIED_STATE_SPACE_DIMENSION
+            self.observation_uncertainty_cov.shape[0] == UNIFIED_STATE_SPACE_DIMENSION
         ), "observation uncertainty matrix is not the correct size"
 
         self.ensemble_size = 1 + 2 * UNIFIED_STATE_SPACE_DIMENSION
@@ -164,8 +160,10 @@ class PhenotypeKFAnCockrell:
                 )
             )
             for model_idx in range(self.ensemble_size):
-                self.ensemble_macrostate[phenotype_idx, model_idx, 0, :] = model_macro_data(
-                    self.ensemble[phenotype_idx][model_idx]
+                self.ensemble_macrostate[phenotype_idx, model_idx, 0, :] = (
+                    self.transform_intrinsic_to_kf(
+                        model_macro_data(self.ensemble[phenotype_idx][model_idx])
+                    )
                 )
 
         self._current_time = t
@@ -195,12 +193,12 @@ class PhenotypeKFAnCockrell:
         else:
             models = deepcopy(self.ensemble)
 
-        for time_idx in range(self._current_time + 1, t + 1):
-            for phenotype_idx in range(self.num_phenotypes):
-                for model_idx, model in enumerate(models[phenotype_idx]):
+        for phenotype_idx in range(self.num_phenotypes):
+            for model_idx, model in enumerate(models[phenotype_idx]):
+                for time_idx in range(self._current_time + 1, t + 1):
                     model.time_step()
                     self.ensemble_macrostate[phenotype_idx, model_idx, time_idx, :] = (
-                        model_macro_data(model)
+                        self.transform_intrinsic_to_kf(model_macro_data(model))
                     )
                     if save_microstate_files:
                         model.save(
@@ -211,6 +209,9 @@ class PhenotypeKFAnCockrell:
                                 else f"phenotype{phenotype_idx}-model{model_idx}-t{time_idx}-projection.hdf5"
                             )
                         )
+
+        if update_ensemble:
+            self._current_time = t
 
     def kf_update(
         self,
@@ -242,6 +243,7 @@ class PhenotypeKFAnCockrell:
         if log:
             print(f"Projecting ensemble to t={observation_time}", flush=True)
 
+        start_time = self._current_time
         self.project_ensemble_to(
             t=observation_time,
             update_ensemble=True,
@@ -258,12 +260,11 @@ class PhenotypeKFAnCockrell:
         if log:
             print(f"Determining weights", end="")
 
-        # TODO: figure out why self.ensemble_macrostate isn't fully filled out
         trajectory_region = (
             self.ensemble_macrostate.reshape(self.num_phenotypes, self.ensemble_size, -1)
             - self.pca_center
         ).reshape(self.num_phenotypes, self.ensemble_size, 2017, 40)
-        trajectory_region[:, :, : self._current_time, :] = 0
+        trajectory_region[:, :, :start_time, :] = 0
         trajectory_region[:, :, observation_time:, :] = 0
         reduced_states = np.einsum(
             "ij,pmj->pmi",
@@ -313,16 +314,14 @@ class PhenotypeKFAnCockrell:
         # compute weighted per-phenotype and per-time mean and covariance
         for phenotype_idx in range(self.num_phenotypes):
             weights = np.exp(log_weights[phenotype_idx, :])
-            self.ensemble_macrostate_mean[
-                phenotype_idx, self._current_time : observation_time, :
-            ] = np.average(
-                self.ensemble_macrostate[
-                    phenotype_idx, :, self._current_time : observation_time, :
-                ],
-                weights=weights,
-                axis=0,
+            self.ensemble_macrostate_mean[phenotype_idx, start_time:observation_time, :] = (
+                np.average(
+                    self.ensemble_macrostate[phenotype_idx, :, start_time:observation_time, :],
+                    weights=weights,
+                    axis=0,
+                )
             )
-            for time_idx in range(self._current_time + 1, observation_time + 1):
+            for time_idx in range(start_time, observation_time + 1):
                 self.ensemble_macrostate_cov[phenotype_idx, time_idx, :, :] = np.cov(
                     self.ensemble_macrostate[phenotype_idx, :, time_idx, :],
                     aweights=weights,
@@ -347,7 +346,7 @@ class PhenotypeKFAnCockrell:
         # R is the restriction of the observation uncertainty matrix to the observed subset
         R = H @ self.observation_uncertainty_cov @ H.T
 
-        observation = transform_intrinsic_to_kf(measurements)
+        observation = self.transform_intrinsic_to_kf(measurements)
 
         ident_matrix = np.identity(UNIFIED_STATE_SPACE_DIMENSION)
 
@@ -434,7 +433,7 @@ class PhenotypeKFAnCockrell:
             for model_idx in range(2 * UNIFIED_STATE_SPACE_DIMENSION + 1):
                 self.model_modification_algorithm(
                     self.ensemble[phenotype_idx][model_idx],
-                    transform_kf_to_intrinsic(
+                    self.transform_kf_to_intrinsic(
                         ensemble_target_locs[
                             phenotype_idx, model_to_sample_pairing[phenotype_idx, model_idx], :
                         ]
@@ -486,7 +485,7 @@ class PhenotypeKFAnCockrell:
             )
             (past_estimate_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL),
-                transform_kf_to_intrinsic(
+                self.transform_kf_to_intrinsic(
                     # TODO: indices
                     self.ensemble_macrostate_mean[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx],
                     index=idx,
@@ -498,7 +497,7 @@ class PhenotypeKFAnCockrell:
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 np.maximum(
                     0.0,
-                    transform_kf_to_intrinsic(
+                    self.transform_kf_to_intrinsic(
                         # TODO: indices
                         self.ensemble_macrostate_mean[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
                         - np.sqrt(
@@ -511,7 +510,7 @@ class PhenotypeKFAnCockrell:
                 ),
                 # np.minimum(
                 #     10 * max_scales[state_var_name],
-                transform_kf_to_intrinsic(
+                self.transform_kf_to_intrinsic(
                     # TODO: indices
                     self.ensemble_macrostate_mean[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
                     + np.sqrt(
@@ -534,14 +533,14 @@ class PhenotypeKFAnCockrell:
 
             (prediction_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                transform_kf_to_intrinsic(mu, index=idx),
+                self.transform_kf_to_intrinsic(mu, index=idx),
                 label="prediction",
                 color="blue",
             )
             prediction_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                np.maximum(0.0, transform_kf_to_intrinsic(mu - sigma, index=idx)),
-                transform_kf_to_intrinsic(
+                np.maximum(0.0, self.transform_kf_to_intrinsic(mu - sigma, index=idx)),
+                self.transform_kf_to_intrinsic(
                     mu + sigma,
                     index=idx,
                 ),
@@ -627,7 +626,7 @@ class PhenotypeKFAnCockrell:
 
             (past_estimate_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL),
-                transform_kf_to_intrinsic(
+                self.transform_kf_to_intrinsic(
                     # TODO: indices
                     self.ensemble_macrostate_mean[
                         cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
@@ -642,7 +641,7 @@ class PhenotypeKFAnCockrell:
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 np.maximum(
                     0.0,
-                    transform_kf_to_intrinsic(
+                    self.transform_kf_to_intrinsic(
                         # TODO: indices
                         self.ensemble_macrostate_mean[
                             cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
@@ -658,7 +657,7 @@ class PhenotypeKFAnCockrell:
                         index=len_state_vars + idx,
                     ),
                 ),
-                transform_kf_to_intrinsic(
+                self.transform_kf_to_intrinsic(
                     # TODO: indices
                     self.ensemble_macrostate_mean[
                         cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
@@ -680,7 +679,7 @@ class PhenotypeKFAnCockrell:
 
             (prediction_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                transform_kf_to_intrinsic(
+                self.transform_kf_to_intrinsic(
                     # TODO: indices
                     self.ensemble_macrostate_mean[
                         cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
@@ -695,7 +694,7 @@ class PhenotypeKFAnCockrell:
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 np.maximum(
                     0.0,
-                    transform_kf_to_intrinsic(
+                    self.transform_kf_to_intrinsic(
                         # TODO: indices
                         self.ensemble_macrostate_mean[
                             cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
@@ -711,7 +710,7 @@ class PhenotypeKFAnCockrell:
                         index=len_state_vars + idx,
                     ),
                 ),
-                transform_kf_to_intrinsic(
+                self.transform_kf_to_intrinsic(
                     # TODO: indices
                     self.ensemble_macrostate_mean[
                         cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
