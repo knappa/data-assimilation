@@ -65,12 +65,8 @@ else:
     )
 
     # parameters for the measurement uncertainty (coeffs in the Kalman filter's R matrix)
-    parser.add_argument(
-        "--uncertainty-P_DAMPS", type=float, default=0.001, required=False
-    )
-    parser.add_argument(
-        "--uncertainty-T1IFN", type=float, default=0.001, required=False
-    )
+    parser.add_argument("--uncertainty-P_DAMPS", type=float, default=0.001, required=False)
+    parser.add_argument("--uncertainty-T1IFN", type=float, default=0.001, required=False)
     parser.add_argument("--uncertainty-TNF", type=float, default=0.001, required=False)
     parser.add_argument("--uncertainty-IFNg", type=float, default=0.001, required=False)
     parser.add_argument("--uncertainty-IL6", type=float, default=0.001, required=False)
@@ -89,9 +85,7 @@ else:
         type=float,
         default=0.001,
     )
-    parser.add_argument(
-        "--verbose", help="print extra diagnostic messages", action="store_true"
-    )
+    parser.add_argument("--verbose", help="print extra diagnostic messages", action="store_true")
 
     parser.add_argument(
         "--predict",
@@ -148,9 +142,7 @@ else:
 rs: Final[Dict[str, float]] = {
     "total_"
     + name: (
-        1.0
-        if not hasattr(args, "uncertainty_" + name)
-        else getattr(args, "uncertainty_" + name)
+        1.0 if not hasattr(args, "uncertainty_" + name) else getattr(args, "uncertainty_" + name)
     )
     for name in [
         "P_DAMPS",
@@ -215,9 +207,7 @@ NUM_CYCLES: Final[int] = TIME_SPAN // SAMPLE_INTERVAL
 # layout for graphing state variables.
 # Attempts to be mostly square, with possibly more rows than columns
 state_var_graphs_cols: Final[int] = int(np.floor(np.sqrt(len(state_vars))))
-state_var_graphs_rows: Final[int] = int(
-    np.ceil(len(state_vars) / state_var_graphs_cols)
-)
+state_var_graphs_rows: Final[int] = int(np.ceil(len(state_vars) / state_var_graphs_cols))
 state_var_graphs_figsize: Final[Tuple[float, float]] = (
     1.8 * state_var_graphs_rows,
     1.8 * state_var_graphs_cols,
@@ -225,9 +215,7 @@ state_var_graphs_figsize: Final[Tuple[float, float]] = (
 
 # layout for graphing parameters.
 # Attempts to be mostly square, with possibly more rows than columns
-variational_params_graphs_cols: Final[int] = int(
-    np.floor(np.sqrt(len(variational_params)))
-)
+variational_params_graphs_cols: Final[int] = int(np.floor(np.sqrt(len(variational_params))))
 variational_params_graphs_rows: Final[int] = int(
     np.ceil(len(variational_params) / variational_params_graphs_cols)
 )
@@ -245,10 +233,7 @@ init_mean_vec = np.array(
 
 init_cov_matrix = np.diag(
     np.array(
-        [
-            0.75 * np.sqrt(default_params[param])
-            for param in (init_only_params + variational_params)
-        ]
+        [0.75 * np.sqrt(default_params[param]) for param in (init_only_params + variational_params)]
     )
 )
 
@@ -257,26 +242,20 @@ init_cov_matrix = np.diag(
 
 # sampled virtual patient parameters
 vp_init_params = default_params.copy()
-vp_init_param_sample = np.abs(
-    multivariate_normal(mean=init_mean_vec, cov=init_cov_matrix).rvs()
-)
+vp_init_param_sample = np.abs(multivariate_normal(mean=init_mean_vec, cov=init_cov_matrix).rvs())
 for sample_component, param_name in zip(
     vp_init_param_sample,
     (init_only_params + variational_params),
 ):
     vp_init_params[param_name] = (
-        round(sample_component)
-        if isinstance(default_params[param_name], int)
-        else sample_component
+        round(sample_component) if isinstance(default_params[param_name], int) else sample_component
     )
 
 # create model for virtual patient
 virtual_patient_model = an_cockrell.AnCockrellModel(**vp_init_params)
 
 # evaluate the virtual patient's trajectory
-vp_trajectory = np.zeros(
-    (TIME_SPAN + 1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64
-)
+vp_trajectory = np.zeros((TIME_SPAN + 1, UNIFIED_STATE_SPACE_DIMENSION), dtype=np.float64)
 
 vp_trajectory[0, :] = model_macro_data(virtual_patient_model)
 # noinspection PyTypeChecker
@@ -406,10 +385,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 )
         time += 1
         macro_data = np.array(
-            [
-                transform_intrinsic_to_kf(model_macro_data(model))
-                for model in model_ensemble
-            ]
+            [transform_intrinsic_to_kf(model_macro_data(model)) for model in model_ensemble]
         )
         # mean_vec[cycle:, time, :] = np.mean(macro_data, axis=0)
         # cov_matrix[cycle:, time, :, :] = np.cov(macro_data, rowvar=False)
@@ -496,9 +472,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                     0.0,
                     transform_kf_to_intrinsic(
                         mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
-                        - np.sqrt(
-                            cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]
-                        ),
+                        - np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
                         index=idx,
                     ),
                 ),
@@ -506,9 +480,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 #     10 * max_scales[state_var_name],
                 transform_kf_to_intrinsic(
                     mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
-                    + np.sqrt(
-                        cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]
-                    ),
+                    + np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
                     index=idx,
                 ),
                 # ),
@@ -517,9 +489,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             )
 
             mu = mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-            sigma = np.sqrt(
-                cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]
-            )
+            sigma = np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx])
 
             (prediction_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
@@ -601,9 +571,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             (past_estimate_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 transform_kf_to_intrinsic(
-                    mean_vec[
-                        cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
-                    ],
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx],
                     index=len_state_vars + idx,
                 ),
                 color="black",
@@ -615,9 +583,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 np.maximum(
                     0.0,
                     transform_kf_to_intrinsic(
-                        mean_vec[
-                            cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
-                        ]
+                        mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx]
                         - np.sqrt(
                             cov_matrix[
                                 cycle,
@@ -630,9 +596,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                     ),
                 ),
                 transform_kf_to_intrinsic(
-                    mean_vec[
-                        cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
-                    ]
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx]
                     + np.sqrt(
                         cov_matrix[
                             cycle,
@@ -651,9 +615,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             (prediction_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 transform_kf_to_intrinsic(
-                    mean_vec[
-                        cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
-                    ],
+                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx],
                     index=len_state_vars + idx,
                 ),
                 label="predictive estimate",
@@ -665,9 +627,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                 np.maximum(
                     0.0,
                     transform_kf_to_intrinsic(
-                        mean_vec[
-                            cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
-                        ]
+                        mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx]
                         - np.sqrt(
                             cov_matrix[
                                 cycle,
@@ -680,9 +640,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
                     ),
                 ),
                 transform_kf_to_intrinsic(
-                    mean_vec[
-                        cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
-                    ]
+                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx]
                     + np.sqrt(
                         cov_matrix[
                             cycle,
@@ -708,10 +666,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
             axs[row, col].set_axis_off()
 
         # place legend
-        if (
-            len(state_vars)
-            < variational_params_graphs_rows * variational_params_graphs_cols
-        ):
+        if len(state_vars) < variational_params_graphs_rows * variational_params_graphs_cols:
             legend_placement = axs[
                 variational_params_graphs_rows - 1, variational_params_graphs_cols - 1
             ]
@@ -772,9 +727,7 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     )
     min_diag = np.min(np.diag(cov_matrix[cycle + 1, time, :, :]))
     if min_diag <= 0.0:
-        cov_matrix[cycle + 1, time, :, :] += (1e-6 - min_diag) * np.eye(
-            cov_matrix.shape[-1]
-        )
+        cov_matrix[cycle + 1, time, :, :] += (1e-6 - min_diag) * np.eye(cov_matrix.shape[-1])
 
     ################################################################################
     # recreate ensemble with new distribution
@@ -786,17 +739,13 @@ for cycle in tqdm(range(NUM_CYCLES), desc="cycle"):
     ).rvs(size=ENSEMBLE_SIZE)
 
     # Gale-Shapely matching algorithm to try and pair up the models and these new samples
-    model_to_sample_pairing = gale_shapely_matching(
-        new_sample=new_sample, macro_data=macro_data
-    )
+    model_to_sample_pairing = gale_shapely_matching(new_sample=new_sample, macro_data=macro_data)
 
     # now do the model modifications
     for model_idx in tqdm(range(ENSEMBLE_SIZE), desc="model modifications"):
         modify_model(
             model_ensemble[model_idx],
-            transform_kf_to_intrinsic(
-                new_sample[model_to_sample_pairing[model_idx], :]
-            ),
+            transform_kf_to_intrinsic(new_sample[model_to_sample_pairing[model_idx], :]),
             verbose=VERBOSE,
             state_var_indices=state_var_indices,
             state_vars=state_vars,
@@ -841,17 +790,13 @@ if GRAPHS:
                     0.0,
                     transform_kf_to_intrinsic(
                         mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
-                        - np.sqrt(
-                            cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]
-                        ),
+                        - np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
                         index=idx,
                     ),
                 ),
                 transform_kf_to_intrinsic(
                     mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
-                    + np.sqrt(
-                        cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]
-                    ),
+                    + np.sqrt(cov_matrix[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx, idx]),
                     index=idx,
                 ),
                 color="green",
@@ -872,17 +817,13 @@ if GRAPHS:
                     0.0,
                     transform_kf_to_intrinsic(
                         mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-                        - np.sqrt(
-                            cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]
-                        ),
+                        - np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
                         index=idx,
                     ),
                 ),
                 transform_kf_to_intrinsic(
                     mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-                    + np.sqrt(
-                        cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]
-                    ),
+                    + np.sqrt(cov_matrix[cycle, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
                     index=idx,
                 ),
                 color="#d5b60a",
@@ -904,19 +845,13 @@ if GRAPHS:
                     0.0,
                     transform_kf_to_intrinsic(
                         mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-                        - np.sqrt(
-                            cov_matrix[
-                                cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx
-                            ]
-                        ),
+                        - np.sqrt(cov_matrix[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
                         index=idx,
                     ),
                 ),
                 transform_kf_to_intrinsic(
                     mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx]
-                    + np.sqrt(
-                        cov_matrix[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]
-                    ),
+                    + np.sqrt(cov_matrix[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, idx, idx]),
                     index=idx,
                 ),
                 color="blue",
@@ -988,9 +923,7 @@ if GRAPHS:
             (past_est_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL),
                 transform_kf_to_intrinsic(
-                    mean_vec[
-                        cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
-                    ],
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx],
                     index=len_state_vars + idx,
                 ),
                 label="estimate of past",
@@ -1002,9 +935,7 @@ if GRAPHS:
                 np.maximum(
                     0.0,
                     transform_kf_to_intrinsic(
-                        mean_vec[
-                            cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
-                        ]
+                        mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx]
                         - np.sqrt(
                             cov_matrix[
                                 cycle,
@@ -1017,9 +948,7 @@ if GRAPHS:
                     ),
                 ),
                 transform_kf_to_intrinsic(
-                    mean_vec[
-                        cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx
-                    ]
+                    mean_vec[cycle, : (cycle + 1) * SAMPLE_INTERVAL, len_state_vars + idx]
                     + np.sqrt(
                         cov_matrix[
                             cycle,
@@ -1037,9 +966,7 @@ if GRAPHS:
             (future_est_before_update_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 transform_kf_to_intrinsic(
-                    mean_vec[
-                        cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
-                    ],
+                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx],
                     index=len_state_vars + idx,
                 ),
                 label="old estimate",
@@ -1051,9 +978,7 @@ if GRAPHS:
                 np.maximum(
                     0.0,
                     transform_kf_to_intrinsic(
-                        mean_vec[
-                            cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
-                        ]
+                        mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx]
                         - np.sqrt(
                             cov_matrix[
                                 cycle,
@@ -1066,9 +991,7 @@ if GRAPHS:
                     ),
                 ),
                 transform_kf_to_intrinsic(
-                    mean_vec[
-                        cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
-                    ]
+                    mean_vec[cycle, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx]
                     + np.sqrt(
                         cov_matrix[
                             cycle,
@@ -1086,9 +1009,7 @@ if GRAPHS:
             (future_est_after_update_center_line,) = axs[row, col].plot(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
                 transform_kf_to_intrinsic(
-                    mean_vec[
-                        cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
-                    ],
+                    mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx],
                     index=len_state_vars + idx,
                 ),
                 label="updated estimate",
@@ -1117,9 +1038,7 @@ if GRAPHS:
                     ),
                 ),
                 transform_kf_to_intrinsic(
-                    mean_vec[
-                        cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx
-                    ]
+                    mean_vec[cycle + 1, (cycle + 1) * SAMPLE_INTERVAL :, len_state_vars + idx]
                     + np.sqrt(
                         cov_matrix[
                             cycle + 1,
@@ -1197,9 +1116,7 @@ sigma_inv_delta = np.array(
 )
 surprisal_quadratic_part = np.einsum("cij,cij->ci", delta_full, sigma_inv_delta)
 surprisal_full = (
-    surprisal_quadratic_part
-    + logdet
-    + UNIFIED_STATE_SPACE_DIMENSION * np.log(2 * np.pi)
+    surprisal_quadratic_part + logdet + UNIFIED_STATE_SPACE_DIMENSION * np.log(2 * np.pi)
 ) / 2.0
 
 #####
@@ -1223,9 +1140,7 @@ sigma_inv_delta = np.array(
     ]
 )
 surprisal_quadratic_part = np.einsum("cij,cij->ci", delta_state, sigma_inv_delta)
-surprisal_state = (
-    surprisal_quadratic_part + logdet + len(state_vars) * np.log(2 * np.pi)
-) / 2.0
+surprisal_state = (surprisal_quadratic_part + logdet + len(state_vars) * np.log(2 * np.pi)) / 2.0
 
 #####
 # param surprisal: restrict to just the params

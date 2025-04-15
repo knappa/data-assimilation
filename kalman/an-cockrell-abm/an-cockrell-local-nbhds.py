@@ -97,10 +97,8 @@ def update_stats(
         # use variant formula (mean of two of the standard updates) to
         # increase symmetry in the fp error (1e-18) range
         cov_mat[:, :] += (
-            (sample - mean)[:, np.newaxis]
-            * (sample - old_mean)[:, np.newaxis].transpose()
-            + (sample - old_mean)[:, np.newaxis]
-            * (sample - mean)[:, np.newaxis].transpose()
+            (sample - mean)[:, np.newaxis] * (sample - old_mean)[:, np.newaxis].transpose()
+            + (sample - old_mean)[:, np.newaxis] * (sample - mean)[:, np.newaxis].transpose()
         ) / 2.0
         num_samples += 1
 

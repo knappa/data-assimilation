@@ -53,9 +53,7 @@ for group_num in trange(5, desc="groups"):
     system_health = np.full((num_sims, num_steps), -1, dtype=np.float64)
 
     # create HDF5 file
-    hdf5_filename = (
-        f"statistics-param-{param_idx}-{param_name}-group-{pct_perturbation}.hdf5"
-    )
+    hdf5_filename = f"statistics-param-{param_idx}-{param_name}-group-{pct_perturbation}.hdf5"
     with h5py.File(hdf5_filename, "w") as f:
         f.create_dataset(
             "param_list",
@@ -255,9 +253,7 @@ for group_num in trange(5, desc="groups"):
         else:
             params[param_name] = float(pct_perturbation * params[param_name])
 
-        param_list[sim_idx, :] = np.array(
-            [params[param] for param in variational_params]
-        )
+        param_list[sim_idx, :] = np.array([params[param] for param in variational_params])
 
         model = an_cockrell.AnCockrellModel(**params)
 
@@ -274,20 +270,12 @@ for group_num in trange(5, desc="groups"):
             total_IL10[sim_idx, step_idx] = model.total_IL10
             total_IL12[sim_idx, step_idx] = model.total_IL12
             total_IL18[sim_idx, step_idx] = model.total_IL18
-            total_extracellular_virus[sim_idx, step_idx] = (
-                model.total_extracellular_virus
-            )
-            total_intracellular_virus[sim_idx, step_idx] = (
-                model.total_intracellular_virus
-            )
+            total_extracellular_virus[sim_idx, step_idx] = model.total_extracellular_virus
+            total_intracellular_virus[sim_idx, step_idx] = model.total_intracellular_virus
             apoptosis_eaten_counter[sim_idx, step_idx] = model.apoptosis_eaten_counter
-            infected_epis[sim_idx, step_idx] = np.sum(
-                model.epithelium == EpiType.Infected
-            )
+            infected_epis[sim_idx, step_idx] = np.sum(model.epithelium == EpiType.Infected)
             dead_epis[sim_idx, step_idx] = np.sum(model.epithelium == EpiType.Dead)
-            apoptosed_epis[sim_idx, step_idx] = np.sum(
-                model.epithelium == EpiType.Apoptosed
-            )
+            apoptosed_epis[sim_idx, step_idx] = np.sum(model.epithelium == EpiType.Apoptosed)
             system_health[sim_idx, step_idx] = model.system_health
 
         with h5py.File(hdf5_filename, "r+") as f:
@@ -301,15 +289,9 @@ for group_num in trange(5, desc="groups"):
             f["total_IL10"][sim_idx, :] = total_IL10[sim_idx, :]
             f["total_IL12"][sim_idx, :] = total_IL12[sim_idx, :]
             f["total_IL18"][sim_idx, :] = total_IL18[sim_idx, :]
-            f["total_extracellular_virus"][sim_idx, :] = total_extracellular_virus[
-                sim_idx, :
-            ]
-            f["total_intracellular_virus"][sim_idx, :] = total_intracellular_virus[
-                sim_idx, :
-            ]
-            f["apoptosis_eaten_counter"][sim_idx, :] = apoptosis_eaten_counter[
-                sim_idx, :
-            ]
+            f["total_extracellular_virus"][sim_idx, :] = total_extracellular_virus[sim_idx, :]
+            f["total_intracellular_virus"][sim_idx, :] = total_intracellular_virus[sim_idx, :]
+            f["apoptosis_eaten_counter"][sim_idx, :] = apoptosis_eaten_counter[sim_idx, :]
             f["infected_epis"][sim_idx, :] = infected_epis[sim_idx, :]
             f["dead_epis"][sim_idx, :] = dead_epis[sim_idx, :]
             f["apoptosed_epis"][sim_idx, :] = apoptosed_epis[sim_idx, :]

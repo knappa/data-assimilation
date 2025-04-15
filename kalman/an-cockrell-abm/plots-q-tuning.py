@@ -39,9 +39,7 @@ axs.set_xlabel("time")
 
 # noinspection PyTypeChecker
 class AnyObjectHandler(HandlerBase):
-    def create_artists(
-        self, legend, orig_handle, x0, y0, width, height, fontsize, trans
-    ):
+    def create_artists(self, legend, orig_handle, x0, y0, width, height, fontsize, trans):
         size = len(orig_handle)
         ls = []
         # noinspection PyShadowingNames

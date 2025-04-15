@@ -52,10 +52,7 @@ for i, j in itertools.combinations(range(3), 2):
     C1 = gm.covariances_[i, :, :]
     C2 = gm.covariances_[j, :, :]
     print(
-        np.sqrt(
-            (m1 - m2) @ (m1 - m2).T
-            + np.trace(C1 + C2 - 2 * sqrtm(sqrtm(C2) @ C1 @ sqrtm(C2)))
-        )
+        np.sqrt((m1 - m2) @ (m1 - m2).T + np.trace(C1 + C2 - 2 * sqrtm(sqrtm(C2) @ C1 @ sqrtm(C2))))
     )
 
 
@@ -92,14 +89,8 @@ bigpca.fit(data.reshape(-1, 2017 * 41))
 mus = []
 covs = []
 for idx in range(3):
-    mus.append(
-        np.mean(bigpca.transform(data[labels == idx].reshape(-1, 2017 * 41)), axis=0)
-    )
-    covs.append(
-        np.cov(
-            bigpca.transform(data[labels == idx].reshape(-1, 2017 * 41)), rowvar=False
-        )
-    )
+    mus.append(np.mean(bigpca.transform(data[labels == idx].reshape(-1, 2017 * 41)), axis=0))
+    covs.append(np.cov(bigpca.transform(data[labels == idx].reshape(-1, 2017 * 41)), rowvar=False))
 
 # gaussian-fitted WD in 2017*41-d
 for i, j in itertools.combinations(range(3), 2):
@@ -109,10 +100,7 @@ for i, j in itertools.combinations(range(3), 2):
     C1 = covs[i]
     C2 = covs[j]
     print(
-        np.sqrt(
-            (m1 - m2) @ (m1 - m2).T
-            + np.trace(C1 + C2 - 2 * sqrtm(sqrtm(C2) @ C1 @ sqrtm(C2)))
-        )
+        np.sqrt((m1 - m2) @ (m1 - m2).T + np.trace(C1 + C2 - 2 * sqrtm(sqrtm(C2) @ C1 @ sqrtm(C2))))
     )
 
 
@@ -132,8 +120,7 @@ for t_idx in range(2017):
         C2 = covs[j, t_idx, :, :]
 
         dists[k, t_idx] = np.sqrt(
-            (m1 - m2) @ (m1 - m2).T
-            + np.trace(C1 + C2 - 2 * sqrtm(sqrtm(C2) @ C1 @ sqrtm(C2)))
+            (m1 - m2) @ (m1 - m2).T + np.trace(C1 + C2 - 2 * sqrtm(sqrtm(C2) @ C1 @ sqrtm(C2)))
         )
 
 

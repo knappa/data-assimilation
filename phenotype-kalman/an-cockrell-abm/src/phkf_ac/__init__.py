@@ -296,7 +296,7 @@ def main_cli():
             print(f"{time=}")
             if time >= ensemble.end_time:
                 print(f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {time=} {ensemble.end_time=}")
-            time = min(ensemble.end_time,time)
+            time = min(ensemble.end_time, time)
             ensemble.project_ensemble_to(t=time, update_ensemble=True)
 
             if PREDICT != "to-kf-update":

@@ -126,9 +126,7 @@ varp_idcs = {str(vp): i for i, vp in enumerate(variational_params_aug)}
 with h5py.File("simulation-statistics.hdf5", "r") as h5file:
     param_list = h5file["param_list"][()]
     system_health = h5file["system_health"][()]
-    key_to_idx = {
-        k: i for i, k in enumerate([k for k in h5file.keys() if k != "param_list"])
-    }
+    key_to_idx = {k: i for i, k in enumerate([k for k in h5file.keys() if k != "param_list"])}
     full_data = np.zeros((len(key_to_idx), *system_health.shape), dtype=np.float64)
     for k, i in key_to_idx.items():
         full_data[i, :] = h5file[k][()]
@@ -168,9 +166,7 @@ if GRAPHS:
 
 log_min_sys_health = transform_intrinsic_to_kf(min_sys_health)
 log_param_list = np.log(param_list)
-log_param_list_aug = np.vstack(
-    [log_param_list.T, np.ones(len(log_param_list))[np.newaxis]]
-)
+log_param_list_aug = np.vstack([log_param_list.T, np.ones(len(log_param_list))[np.newaxis]])
 
 log_least_squares_sol, log_residuals, log_rank, log_sing_vals = np.linalg.lstsq(
     log_param_list_aug.T, log_min_sys_health, rcond=None
@@ -196,9 +192,7 @@ if GRAPHS:
     plt.xlabel("abs sensitivity")
     plt.ylabel("abs log sensitivity")
     for i, txt in enumerate(variational_params):
-        ax.annotate(
-            txt, (np.abs(least_squares_sol)[i], np.abs(log_least_squares_sol)[i])
-        )
+        ax.annotate(txt, (np.abs(least_squares_sol)[i], np.abs(log_least_squares_sol)[i]))
 
 foo = np.sqrt(least_squares_sol**2 + log_least_squares_sol**2)
 foo_sort_indices = np.argsort(np.abs(log_least_squares_sol))
@@ -213,9 +207,7 @@ system_health_sensitivity, sh_residuals, sh_rank, sh_sing_vals = np.linalg.lstsq
     param_list_aug.T, system_health, rcond=None
 )
 
-system_health_sensitivity_column_norm = np.linalg.norm(
-    system_health_sensitivity, axis=1
-)
+system_health_sensitivity_column_norm = np.linalg.norm(system_health_sensitivity, axis=1)
 
 # compute log sensitivity matrix
 log_system_health = np.log(np.maximum(np.exp(-25), system_health))
@@ -225,9 +217,7 @@ log_system_health = np.log(np.maximum(np.exp(-25), system_health))
     log_sh_rank,
     log_sh_sing_vals,
 ) = np.linalg.lstsq(log_param_list_aug.T, log_system_health, rcond=None)
-system_health_log_sensitivity_column_norm = np.linalg.norm(
-    system_health_log_sensitivity, axis=1
-)
+system_health_log_sensitivity_column_norm = np.linalg.norm(system_health_log_sensitivity, axis=1)
 
 if GRAPHS:
     # matrix plot of sensitivity matrix, in chunks
@@ -255,9 +245,7 @@ if GRAPHS:
     fig, axs = plt.subplots(8, figsize=(8, 20))
     for plt_idx in range(8):
         axs[plt_idx].imshow(
-            np.abs(
-                system_health_log_sensitivity[:, plt_idx * 252 : (plt_idx + 1) * 252]
-            ),
+            np.abs(system_health_log_sensitivity[:, plt_idx * 252 : (plt_idx + 1) * 252]),
             aspect=1,
         )
     fig.tight_layout()
@@ -267,9 +255,7 @@ if GRAPHS:
     fig, axs = plt.subplots(8, figsize=(8, 20))
     for plt_idx in range(8):
         axs[plt_idx].imshow(
-            np.abs(
-                system_health_log_sensitivity[:, plt_idx * 252 : (plt_idx + 1) * 252]
-            )
+            np.abs(system_health_log_sensitivity[:, plt_idx * 252 : (plt_idx + 1) * 252])
             / system_health_log_sensitivity_column_norm[:, np.newaxis],
             aspect=1,
         )
@@ -281,9 +267,7 @@ if GRAPHS:
     max_log_sensitivity = np.max(np.abs(system_health_log_sensitivity), axis=1)
     plt.figure()
     plt.plot(
-        system_health_log_sensitivity.T[:, max_log_sensitivity > min_sensitivity][
-            :, :-1
-        ],
+        system_health_log_sensitivity.T[:, max_log_sensitivity > min_sensitivity][:, :-1],
         label=variational_params_aug[max_log_sensitivity > min_sensitivity][:-1],
     )
     plt.legend()
@@ -346,9 +330,7 @@ if GRAPHS:
     fig = plt.figure()
     plt.plot(early_system_health_log_sensitivity.T[:, :-1])
 
-early_indices_top_ten_log = np.argsort(
-    early_system_health_log_sensitivity_column_norm[:-1]
-)[-10:]
+early_indices_top_ten_log = np.argsort(early_system_health_log_sensitivity_column_norm[:-1])[-10:]
 
 ################################################################################
 
@@ -357,9 +339,7 @@ full_data_log_sensitivity, _, _, _ = np.linalg.lstsq(
     np.log(np.maximum(np.exp(-25), full_data.reshape((full_data.shape[0], -1)))),
     rcond=None,
 )
-full_data_log_sensitivity_column_norm = np.linalg.norm(
-    full_data_log_sensitivity, axis=1
-)
+full_data_log_sensitivity_column_norm = np.linalg.norm(full_data_log_sensitivity, axis=1)
 indices_full = np.argsort(full_data_log_sensitivity_column_norm[:-1])[-10:]
 names_full = set(variational_params_aug[indices_full])
 

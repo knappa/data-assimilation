@@ -420,9 +420,7 @@ for sim_idx in trange(num_sims, desc="simulation"):
     pct_perturbation = sample[sim_idx]
     for pert_idx, param in enumerate(variational_params):
         if isinstance(params[param], int):
-            params[param] = int(
-                round(float(pct_perturbation[pert_idx] * params[param]))
-            )
+            params[param] = int(round(float(pct_perturbation[pert_idx] * params[param])))
         else:
             params[param] = float(pct_perturbation[pert_idx] * params[param])
 
@@ -449,9 +447,7 @@ for sim_idx in trange(num_sims, desc="simulation"):
         apoptosis_eaten_counter[sim_idx, step_idx] = model.apoptosis_eaten_counter
         infected_epis[sim_idx, step_idx] = np.sum(model.epithelium == EpiType.Infected)
         dead_epis[sim_idx, step_idx] = np.sum(model.epithelium == EpiType.Dead)
-        apoptosed_epis[sim_idx, step_idx] = np.sum(
-            model.epithelium == EpiType.Apoptosed
-        )
+        apoptosed_epis[sim_idx, step_idx] = np.sum(model.epithelium == EpiType.Apoptosed)
         system_health[sim_idx, step_idx] = model.system_health
 
     with h5py.File("simulation-statistics.hdf5", "r+") as f:
@@ -466,12 +462,8 @@ for sim_idx in trange(num_sims, desc="simulation"):
         f["total_IL10"][sim_idx, :] = total_IL10[sim_idx, :]
         f["total_IL12"][sim_idx, :] = total_IL12[sim_idx, :]
         f["total_IL18"][sim_idx, :] = total_IL18[sim_idx, :]
-        f["total_extracellular_virus"][sim_idx, :] = total_extracellular_virus[
-            sim_idx, :
-        ]
-        f["total_intracellular_virus"][sim_idx, :] = total_intracellular_virus[
-            sim_idx, :
-        ]
+        f["total_extracellular_virus"][sim_idx, :] = total_extracellular_virus[sim_idx, :]
+        f["total_intracellular_virus"][sim_idx, :] = total_intracellular_virus[sim_idx, :]
         f["apoptosis_eaten_counter"][sim_idx, :] = apoptosis_eaten_counter[sim_idx, :]
         f["infected_epis"][sim_idx, :] = infected_epis[sim_idx, :]
         f["dead_epis"][sim_idx, :] = dead_epis[sim_idx, :]

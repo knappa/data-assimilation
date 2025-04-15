@@ -10,9 +10,7 @@ levels = {"0.8": 0, "0.9": 1, "1.0": 2, "1.1": 3, "1.2": 4}
 
 param_names = dict()
 
-hdf_files = [
-    f for f in os.listdir(".") if f.endswith(".hdf5") and f.startswith("statistics")
-]
+hdf_files = [f for f in os.listdir(".") if f.endswith(".hdf5") and f.startswith("statistics")]
 
 data = np.zeros((64, num_param_levels, num_sims), dtype=np.float64)
 
@@ -85,9 +83,7 @@ for param_idx_t in range(64):
     else:
         title = str(params[param_idx])
     axs[r, c].set_title(fix_title(title), fontsize=8, wrap=True)
-fig.subplots_adjust(
-    top=0.97, bottom=0.01, left=0.035, right=0.995, hspace=0.8, wspace=0.11
-)
+fig.subplots_adjust(top=0.97, bottom=0.01, left=0.035, right=0.995, hspace=0.8, wspace=0.11)
 plt.savefig("cdf-plots-for-ks-test.pdf")
 # plt.show()
 plt.close()
@@ -159,9 +155,7 @@ for param_idx_t in range(64):
     title = bytes(params[param_idx]).decode("utf-8")
     axs[r, c].set_title(fix_title(title), fontsize=8, wrap=True)
     axs[r, c].set_xticks([0.8, 0.9, 1.0, 1.1, 1.2])
-fig.subplots_adjust(
-    top=0.97, bottom=0.01, left=0.035, right=0.995, hspace=0.8, wspace=0.11
-)
+fig.subplots_adjust(top=0.97, bottom=0.01, left=0.035, right=0.995, hspace=0.8, wspace=0.11)
 # plt.savefig('ks-plots.pdf')
 plt.show()
 # plt.close()

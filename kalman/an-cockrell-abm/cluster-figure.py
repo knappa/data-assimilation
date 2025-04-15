@@ -338,8 +338,7 @@ for t_idx in range(2017):
         C2 = covs[j, t_idx, :, :]
 
         dists[k, t_idx] = np.sqrt(
-            (m1 - m2) @ (m1 - m2).T
-            + np.trace(C1 + C2 - 2 * sqrtm(sqrtm(C2) @ C1 @ sqrtm(C2)))
+            (m1 - m2) @ (m1 - m2).T + np.trace(C1 + C2 - 2 * sqrtm(sqrtm(C2) @ C1 @ sqrtm(C2)))
         )
 
 
@@ -371,18 +370,17 @@ plt.show()
 # combo figure for wasserstein dist and selected state components
 
 
-
 SMALL_SIZE = 8
 MEDIUM_SIZE = 10
 BIGGER_SIZE = 12
 
-plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
-plt.rc('axes', titlesize=SMALL_SIZE)     # fontsize of the axes title
-plt.rc('axes', labelsize=MEDIUM_SIZE)    # fontsize of the x and y labels
-plt.rc('xtick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
-plt.rc('ytick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
-plt.rc('legend', fontsize=SMALL_SIZE)    # legend fontsize
-plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
+plt.rc("font", size=SMALL_SIZE)  # controls default text sizes
+plt.rc("axes", titlesize=SMALL_SIZE)  # fontsize of the axes title
+plt.rc("axes", labelsize=MEDIUM_SIZE)  # fontsize of the x and y labels
+plt.rc("xtick", labelsize=SMALL_SIZE)  # fontsize of the tick labels
+plt.rc("ytick", labelsize=SMALL_SIZE)  # fontsize of the tick labels
+plt.rc("legend", fontsize=SMALL_SIZE)  # legend fontsize
+plt.rc("figure", titlesize=BIGGER_SIZE)  # fontsize of the figure title
 
 
 fig = plt.figure(figsize=(5, 5), constrained_layout=True)
@@ -476,9 +474,6 @@ ax_hepi.set_title(
     wrap=True,
 )
 
-blank.legend(
-    [line1[0], line2[0], line3[0]], [f"Cluster {i}" for i in range(3)], loc="upper left"
-)
+blank.legend([line1[0], line2[0], line3[0]], [f"Cluster {i}" for i in range(3)], loc="upper left")
 
 plt.show()
-
