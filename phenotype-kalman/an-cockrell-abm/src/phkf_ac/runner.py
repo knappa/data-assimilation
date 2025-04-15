@@ -44,7 +44,7 @@ class PhenotypeKFAnCockrell:
     transform_intrinsic_to_kf: Optional[Callable] = field(init=True)
     transform_kf_to_intrinsic: Optional[Callable] = field(init=True)
 
-    # PCA from 2017*41 dimensions to 3 by matrix C (3,2017*41) with center m (2017*41,)
+    # PCA from 2017*40 dimensions to 3 by matrix C (3,2017*40) with center m (2017*40,)
     # then each phenotype_i from gaussian with mean m_i (3,) and cov P_i (3,3)
     # P(phi_i | x) = exp( -(1/2) (C(x-m)-m_i)^T P_i^{-1} (C(x-m)-m_i) ) / sum_i P(\phi_i | x)
     pca_center: np.ndarray = field(init=True)
@@ -235,10 +235,6 @@ class PhenotypeKFAnCockrell:
         assert len(observation_types) == len(measurements)
         dim_observation = len(observation_types)
         assert observation_time >= self._current_time, "KF update cannot work backward in time"
-        if observation_time == self._current_time:
-            raise NotImplementedError(
-                "Multiple same-time observations split between different function calls are unsupported"
-            )
 
         if log:
             print(f"Projecting ensemble to t={observation_time}", flush=True)
@@ -263,7 +259,7 @@ class PhenotypeKFAnCockrell:
         trajectory_region = (
             self.ensemble_macrostate.reshape(self.num_phenotypes, self.ensemble_size, -1)
             - self.pca_center
-        ).reshape(self.num_phenotypes, self.ensemble_size, 2017, 40)
+        ).reshape(self.num_phenotypes, self.ensemble_size, self.end_time+1, UNIFIED_STATE_SPACE_DIMENSION)
         trajectory_region[:, :, :start_time, :] = 0
         trajectory_region[:, :, observation_time:, :] = 0
         reduced_states = np.einsum(
@@ -418,7 +414,7 @@ class PhenotypeKFAnCockrell:
 
             model_to_sample_pairing[phenotype_idx, :] = gale_shapely_matching(
                 new_sample=ensemble_target_locs[phenotype_idx],
-                macro_data=self.ensemble_macrostate[phenotype_idx, observation_time],
+                macro_data=self.ensemble_macrostate[phenotype_idx, :, observation_time],
             )
 
         if log:

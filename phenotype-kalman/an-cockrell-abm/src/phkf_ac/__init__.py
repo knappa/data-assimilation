@@ -133,42 +133,9 @@ def main_cli():
     else:
         from phkf_ac.modify_simple import modify_model
 
-    # # rs encodes the uncertainty in the various observations. Defaults are 1.0 if
-    # # not set via the command line. (See above for defaults if you are. Right now,
-    # # they are also 1.0.)
-    # rs: Final[Dict[str, float]] = {
-    #     "total_"
-    #     + name: (
-    #         1.0
-    #         if not hasattr(args, "uncertainty_" + name)
-    #         else getattr(args, "uncertainty_" + name)
-    #     )
-    #     for name in [
-    #         "P_DAMPS",
-    #         "T1IFN",
-    #         "TNF",
-    #         "IFNg",
-    #         "IL1",
-    #         "IL6",
-    #         "IL8",
-    #         "IL10",
-    #         "IL12",
-    #         "IL18",
-    #         "extracellular_virus",
-    #     ]
-    # }
-    #
-    # PARAM_STOCH_LEVEL: Final[float] = (
-    #     0.001
-    #     if not hasattr(args, "param_stoch_level")
-    #     or args.param_stoch_level is None
-    #     or args.param_stoch_level == -1
-    #     else args.param_stoch_level
-    # )
+    ################################################################################
+    # constants
 
-    # ENSEMBLE_SIZE: Final[int] = (
-    #     (UNIFIED_STATE_SPACE_DIMENSION + 1) * UNIFIED_STATE_SPACE_DIMENSION // 2
-    # )  # max(50, (UNIFIED_STATE_SPACE_DIMENSION + 1))
     OBSERVABLES: Final[List[str]] = (
         ["extracellular_virus"] if not hasattr(args, "measurements") else args.measurements
     )
@@ -193,17 +160,7 @@ def main_cli():
 
     log: Final[bool] = False if not hasattr(args, "log") else args.log
 
-    ################################################################################
-    # constants
-
-    # have the models' parameters do a random walk over time (should help
-    # with covariance starvation)
-    # PARAMETER_RANDOM_WALK: Final[bool] = True
-
     NUM_CYCLES: Final[int] = TIME_SPAN // SAMPLE_INTERVAL
-
-    ################################################################################
-    # graph layout computations
 
     ################################################################################
     # statistical parameters
@@ -215,7 +172,7 @@ def main_cli():
     init_cov_matrix = np.diag(
         np.array(
             [
-                0.75 * np.sqrt(default_params[param])
+                0.5 * np.sqrt(default_params[param])
                 for param in (init_only_params + variational_params)
             ]
         )
@@ -307,6 +264,7 @@ def main_cli():
         model_modification_algorithm=modify_model,
         transform_intrinsic_to_kf=transform_intrinsic_to_kf,
         transform_kf_to_intrinsic=transform_kf_to_intrinsic,
+        end_time=TIME_SPAN,
     )
 
     if log:
@@ -335,14 +293,18 @@ def main_cli():
 
             # advance ensemble of models
             time += SAMPLE_INTERVAL
+            print(f"{time=}")
+            if time >= ensemble.end_time:
+                print(f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {time=} {ensemble.end_time=}")
+            time = min(ensemble.end_time,time)
             ensemble.project_ensemble_to(t=time, update_ensemble=True)
 
             if PREDICT != "to-kf-update":
                 if PREDICT == "to-next-kf-update":
-                    final_time = time + SAMPLE_INTERVAL + 1
+                    final_time = min(ensemble.end_time, time + SAMPLE_INTERVAL + 1)
                 else:
                     # PREDICT == "to-end"
-                    final_time = TIME_SPAN + 1
+                    final_time = ensemble.end_time
                 ensemble.project_ensemble_to(t=final_time, update_ensemble=False)
 
             t.set_postfix_str("")

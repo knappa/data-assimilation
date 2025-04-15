@@ -291,6 +291,7 @@ def modify_model(
     :param rng: optionally, specify a random number generator
     :return: None
     """
+    np.nan_to_num(desired_state, copy=False)  # really, if we ever trigger this, it's a problem
     np.abs(desired_state, out=desired_state)  # in-place absolute value
 
     for param_idx, param_name in enumerate(variational_params, start=len(state_vars)):
@@ -419,7 +420,9 @@ def modify_model(
         np.rint(desired_state[state_var_indices["apoptosis_eaten_counter"]])
     )  # no internal state here
 
-    dc_delta = int(np.rint(desired_state[state_var_indices["dc_count"]] - model.dc_count))
+    dc_delta = int(
+        min(model.MAX_DCS, np.rint(desired_state[state_var_indices["dc_count"]])) - model.dc_count
+    )
     if dc_delta > 0:
         for _ in range(dc_delta):
             model.create_dc()
@@ -432,7 +435,9 @@ def modify_model(
         model.num_dcs -= num_to_kill
         assert model.num_dcs == np.sum(model.dc_mask)
 
-    nk_delta = int(np.rint(desired_state[state_var_indices["nk_count"]] - model.nk_count))
+    nk_delta = int(
+        min(model.MAX_NKS, np.rint(desired_state[state_var_indices["nk_count"]])) - model.nk_count
+    )
     if nk_delta > 0:
         model.create_nk(number=int(nk_delta))
     elif nk_delta < 0:
@@ -444,7 +449,10 @@ def modify_model(
         model.num_nks -= num_to_kill
         assert model.num_nks == np.sum(model.nk_mask)
 
-    pmn_delta = int(np.rint(desired_state[state_var_indices["pmn_count"]] - model.pmn_count))
+    pmn_delta = int(
+        min(model.MAX_PMNS, np.rint(desired_state[state_var_indices["pmn_count"]]))
+        - model.pmn_count
+    )
     if pmn_delta > 0:
         # need more pmns
         # adapted from activated_endo_update
@@ -476,7 +484,10 @@ def modify_model(
         model.num_pmns -= num_to_kill
         assert model.num_pmns == np.sum(model.pmn_mask)
 
-    macro_delta = int(np.rint(desired_state[state_var_indices["macro_count"]] - model.macro_count))
+    macro_delta = int(
+        min(model.MAX_MACROPHAGES, np.rint(desired_state[state_var_indices["macro_count"]]))
+        - model.macro_count
+    )
     if macro_delta > 0:
         # need more macrophages, create them as in init in random locations
         for _ in range(macro_delta):
