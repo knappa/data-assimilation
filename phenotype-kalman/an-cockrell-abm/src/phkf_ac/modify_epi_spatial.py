@@ -95,10 +95,10 @@ def quantization_maker(
 
             # prefer to be close to the natural quantization
             quantized_neg_log_likelihood = quantization_similarity_loss_weight * np.sum(
-                (quantized_state[:5] - sample[:5]) ** 2
+                np.nan_to_num((quantized_state[:5] - sample[:5]) ** 2)
             )
             # prefer to be a typical local neighborhood
-            quantized_neg_log_likelihood += (
+            quantized_neg_log_likelihood += np.nan_to_num(
                 typical_neighborhood_loss_weight
                 * (quantized_state - mean)
                 @ cov_mat_inv
@@ -107,7 +107,7 @@ def quantization_maker(
             # prefer to be like one's neighbors
             # omitting an + np.log(np.sum(neighbor_states)) term since it is a per neighborhood constant
             quantized_neg_log_likelihood += neighbor_similarity_loss_weight * (
-                -np.log(neighbor_states[epitype])
+                -np.nan_to_num(np.log(neighbor_states[epitype]))
             )
             if quantized_neg_log_likelihood < min_neg_log_likelihood:
                 min_type = epitype
@@ -474,7 +474,7 @@ def modify_model(
                 )
         else:
             if verbose:
-                print("Nowhere to put desired pmns")
+                print(f"Nowhere to put {pmn_delta} desired pmns")
     elif pmn_delta < 0:
         # need fewer pmns, kill them randomly
         num_to_kill = min(-pmn_delta, model.num_pmns)

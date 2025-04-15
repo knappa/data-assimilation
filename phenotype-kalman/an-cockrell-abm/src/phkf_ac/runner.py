@@ -209,6 +209,10 @@ class PhenotypeKFAnCockrell:
                                 else f"phenotype{phenotype_idx}-model{model_idx}-t{time_idx}-projection.hdf5"
                             )
                         )
+            # TODO: use weighing?
+            self.ensemble_macrostate_mean[phenotype_idx, :, :] = np.mean(
+                self.ensemble_macrostate[phenotype_idx, :, :, :], axis=0
+            )
 
         if update_ensemble:
             self._current_time = t
@@ -254,14 +258,21 @@ class PhenotypeKFAnCockrell:
 
         # Step 1a. Determine weights
         if log:
-            print(f"Determining weights", end="")
+            print(f"Determining weights", end="", flush=True)
 
+        # center the trajectories on the PCA's mean
         trajectory_region = (
             self.ensemble_macrostate.reshape(self.num_phenotypes, self.ensemble_size, -1)
             - self.pca_center
-        ).reshape(self.num_phenotypes, self.ensemble_size, self.end_time+1, UNIFIED_STATE_SPACE_DIMENSION)
+        ).reshape(
+            self.num_phenotypes,
+            self.ensemble_size,
+            self.end_time + 1,
+            UNIFIED_STATE_SPACE_DIMENSION,
+        )
+        # zero out values before and after the relevant time region
         trajectory_region[:, :, :start_time, :] = 0
-        trajectory_region[:, :, observation_time:, :] = 0
+        trajectory_region[:, :, observation_time + 1 :, :] = 0
         reduced_states = np.einsum(
             "ij,pmj->pmi",
             self.pca_matrix,  # [3,UNIFIED_STATE_SPACE_DIMENSION*dt]
@@ -310,9 +321,11 @@ class PhenotypeKFAnCockrell:
         # compute weighted per-phenotype and per-time mean and covariance
         for phenotype_idx in range(self.num_phenotypes):
             weights = np.exp(log_weights[phenotype_idx, :])
-            self.ensemble_macrostate_mean[phenotype_idx, start_time:observation_time, :] = (
+            self.ensemble_macrostate_mean[phenotype_idx, start_time : observation_time + 1, :] = (
                 np.average(
-                    self.ensemble_macrostate[phenotype_idx, :, start_time:observation_time, :],
+                    self.ensemble_macrostate[
+                        phenotype_idx, :, start_time : observation_time + 1, :
+                    ],
                     weights=weights,
                     axis=0,
                 )
@@ -325,12 +338,12 @@ class PhenotypeKFAnCockrell:
                 )
 
         if log:
-            print(f" (Finished)")
+            print(f" (Finished)", flush=True)
 
         # ######### Step 2: perform the Kalman update from the observation, per phenotype
 
         if log:
-            print(f"Kalman update", end="")
+            print(f"Kalman update", end="", flush=True)
 
         # Step 2a. Compute some generally useful stuff
 
@@ -418,12 +431,12 @@ class PhenotypeKFAnCockrell:
             )
 
         if log:
-            print(f" (Finished)")
+            print(f" (Finished)", flush=True)
 
         # ######### Step 4: Microstate synthesis
 
         if log:
-            print(f"Microstate synthesis", end="")
+            print(f"Microstate synthesis", end="", flush=True)
 
         for phenotype_idx in range(self.num_phenotypes):
             for model_idx in range(2 * UNIFIED_STATE_SPACE_DIMENSION + 1):
@@ -441,7 +454,7 @@ class PhenotypeKFAnCockrell:
                 )
 
         if log:
-            print(f" (Finished)")
+            print(f" (Finished)", flush=True)
 
         # ######### Step 5: Cleanup
 

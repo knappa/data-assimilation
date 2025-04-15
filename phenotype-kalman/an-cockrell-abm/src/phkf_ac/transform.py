@@ -169,20 +169,36 @@ def transform_intrinsic_to_kf(macrostate_intrinsic: np.ndarray, *, index=-1) -> 
     """
     if index == -1:
         # full state
-        retval = np.nan_to_num(np.log(__EPSILON__ + macrostate_intrinsic))
+        retval = np.nan_to_num(
+            np.log(np.clip(__EPSILON__ + macrostate_intrinsic, __EPSILON__, np.inf))
+        )
         # counts
-        retval[18:22] = np.nan_to_num(
-            np.log(
-                __EPSILON__ + macrostate_intrinsic[18:22] / (51**2 - macrostate_intrinsic[18:22])
-            )
+        # retval[18:22] = np.nan_to_num(
+        #     np.log(
+        #         __EPSILON__ + macrostate_intrinsic[18:22] / (51**2 - macrostate_intrinsic[18:22])
+        #     )
+        # )
+        retval[18:22] = np.clip(
+            np.nan_to_num(
+                np.tan((np.pi - __EPSILON__) * (-0.5 + macrostate_intrinsic[18:22] / 51**2))
+            ),
+            -2000,
+            2000,
         )
         return retval
     elif 18 <= index < 22:
         # count parameters
-        return np.log(__EPSILON__ + macrostate_intrinsic / (51**2 - macrostate_intrinsic))
+        # return np.log(__EPSILON__ + macrostate_intrinsic / (51**2 - macrostate_intrinsic))
+        return np.clip(
+            np.nan_to_num(np.tan((np.pi - __EPSILON__) * (-0.5 + macrostate_intrinsic / 51**2))),
+            -2000,
+            2000,
+        )
     else:
         # other parameters
-        return np.nan_to_num(np.log(__EPSILON__ + macrostate_intrinsic))
+        return np.nan_to_num(
+            np.log(np.clip(__EPSILON__ + macrostate_intrinsic, __EPSILON__, np.inf))
+        )
 
 
 def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, index=-1) -> np.ndarray:
@@ -197,18 +213,37 @@ def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, index=-1) -> np.ndar
         # full state
         retval = np.maximum(0.0, np.nan_to_num(np.exp(macrostate_kf) - __EPSILON__))
         # counts
-        retval[18:22] = np.nan_to_num(
-            (51**2)
-            * (np.exp(macrostate_kf[18:22]) - __EPSILON__)
-            / (1 + __EPSILON__ - np.exp(macrostate_kf[18:22]))
+        # retval[18:22] = np.nan_to_num(
+        #     (51**2)
+        #     * (np.exp(macrostate_kf[18:22]) - __EPSILON__)
+        #     / (1 + __EPSILON__ - np.exp(macrostate_kf[18:22]))
+        # )
+        retval[18:22] = np.clip(
+            np.nan_to_num(
+                51**2
+                * (
+                    0.5
+                    + np.arctan(np.clip(macrostate_kf[18:22], -2000, 2000)) / (np.pi - __EPSILON__)
+                )
+            ),
+            0,
+            51**2,
         )
         return retval
     elif 18 <= index < 22:
         # count parameters
-        return np.nan_to_num(
-            (51**2)
-            * (np.exp(macrostate_kf) - __EPSILON__)
-            / (1 + __EPSILON__ - np.exp(macrostate_kf))
+        # return np.nan_to_num(
+        #     (51**2)
+        #     * (np.exp(macrostate_kf) - __EPSILON__)
+        #     / (1 + __EPSILON__ - np.exp(macrostate_kf))
+        # )
+        return np.clip(
+            np.nan_to_num(
+                51**2
+                * (0.5 + np.arctan(np.clip(macrostate_kf, -2000, 2000)) / (np.pi - __EPSILON__))
+            ),
+            0,
+            51**2,
         )
     else:
         # other parameters
