@@ -267,6 +267,6 @@ def abslogdet(m: np.ndarray) -> np.ndarray:
     else:
         ald = np.zeros(m.shape[:-2])
         for idcs in itertools.product(*map(range, m.shape[:-2])):
-            *_, U = lu(m)
-            ald[idcs] = np.sum(np.log(np.minimum(1e-10, np.abs(np.diag(U)))))
+            *_, U = lu(m[idcs])
+            ald[idcs] = np.sum(np.log(np.maximum(1e-10, np.abs(np.diag(U)))))
         return ald
