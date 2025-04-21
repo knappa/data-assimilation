@@ -11,6 +11,7 @@ def main_cli():
     import h5py
     import matplotlib.pyplot as plt
     import numpy as np
+    from scipy.special import logsumexp
     from scipy.stats import multivariate_normal
     from tqdm.auto import tqdm
 
@@ -24,7 +25,7 @@ def main_cli():
     )
     from phkf_ac.runner import figure_gridlayout
     from phkf_ac.transform import transform_intrinsic_to_kf, transform_kf_to_intrinsic
-    from phkf_ac.util import fix_title, gale_shapely_matching, model_macro_data, slogdet
+    from phkf_ac.util import abslogdet, fix_title, gale_shapely_matching, model_macro_data
 
     ################################################################################
 
@@ -292,16 +293,17 @@ def main_cli():
             t.set_postfix_str("Advancing ensemble")
 
             # advance ensemble of models
+            previous_time = time
             time += SAMPLE_INTERVAL
             print(f"{time=}")
             if time >= ensemble.end_time:
                 print(f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {time=} {ensemble.end_time=}")
-            time = min(ensemble.end_time, time)
+            time = np.min([ensemble.end_time, time])
             ensemble.project_ensemble_to(t=time, update_ensemble=True)
 
             if PREDICT != "to-kf-update":
                 if PREDICT == "to-next-kf-update":
-                    final_time = min(ensemble.end_time, time + SAMPLE_INTERVAL + 1)
+                    final_time = np.min([ensemble.end_time, time + SAMPLE_INTERVAL + 1])
                 else:
                     # PREDICT == "to-end"
                     final_time = ensemble.end_time
@@ -314,6 +316,7 @@ def main_cli():
 
             if GRAPHS:
                 t.set_postfix_str("Plotting")
+                # TODO: limit the plot range when we aren't predicting to the end
                 ensemble.plot_state_vars(
                     TIME_SPAN, vp_trajectory, cycle, SAMPLE_INTERVAL, FILE_PREFIX
                 )
@@ -340,6 +343,7 @@ def main_cli():
                     ],
                     dtype=np.float64,
                 ),
+                previous_observation_time=previous_time,
                 save_microstate_files=False,
             )
 
@@ -709,83 +713,110 @@ def main_cli():
 
     #####
     # full surprisal: all state vars and params
-    # TODO: indices, refactor into ensemble class
-    delta_full = ensemble.ensemble_macrostate_mean - transform_intrinsic_to_kf(vp_trajectory)
-    _, logdet = slogdet(ensemble.ensemble_macrostate_cov)
-    sigma_inv_delta = np.array(
-        [
+    per_phenotype_surprisal_full = np.zeros(
+        (ensemble.num_phenotypes, ensemble.ensemble_macrostate_cov.shape[1]), dtype=np.float64
+    )  # (phenotype,time)
+    for phenotype_idx in range(ensemble.num_phenotypes):
+        delta_state = ensemble.ensemble_macrostate_mean[
+            phenotype_idx, :, :
+        ] - transform_intrinsic_to_kf(vp_trajectory)
+
+        logdet = abslogdet(ensemble.ensemble_macrostate_cov[phenotype_idx])
+        sigma_inv_delta = np.array(
             [
                 np.linalg.lstsq(
-                    ensemble.ensemble_macrostate_cov[cycle, t_idx, :, :],
-                    delta_full[cycle, t_idx, :],
+                    ensemble.ensemble_macrostate_cov[phenotype_idx, t_idx, :, :],
+                    delta_state[t_idx, :],
                     rcond=None,
                 )[0]
                 for t_idx in range(ensemble.ensemble_macrostate_cov.shape[1])
             ]
-            for cycle in range(NUM_CYCLES + 1)
-        ]
+        )
+        surprisal_quadratic_part = np.einsum("ti,ti->t", delta_state, sigma_inv_delta)
+        per_phenotype_surprisal_full[phenotype_idx, :] = (
+            surprisal_quadratic_part + logdet + np.log(2 * np.pi) * UNIFIED_STATE_SPACE_DIMENSION
+        ) / 2.0
+
+    # noinspection PyUnresolvedReferences
+    surprisal_full = -logsumexp(
+        ensemble.log_phenotype_distribution_timeseries.T - per_phenotype_surprisal_full,
+        return_sign=False,
+        axis=0,
     )
-    surprisal_quadratic_part = np.einsum("cij,cij->ci", delta_full, sigma_inv_delta)
-    surprisal_full = (
-        surprisal_quadratic_part + logdet + UNIFIED_STATE_SPACE_DIMENSION * np.log(2 * np.pi)
-    ) / 2.0
 
     #####
     # state surprisal: restrict to just the state vars
-    delta_state = (
-        ensemble.ensemble_macrostate_mean[:, :, : len(state_vars)]
-        - transform_intrinsic_to_kf(vp_trajectory)[:, : len(state_vars)]
-    )
-    _, logdet = slogdet(
-        ensemble.ensemble_macrostate_cov[:, :, : len(state_vars), : len(state_vars)]
-    )
-    sigma_inv_delta = np.array(
-        [
+    per_phenotype_surprisal_state = np.zeros(
+        (ensemble.num_phenotypes, ensemble.ensemble_macrostate_cov.shape[1]), dtype=np.float64
+    )  # (phenotype,time)
+    for phenotype_idx in range(ensemble.num_phenotypes):
+        delta_state = (
+            ensemble.ensemble_macrostate_mean[phenotype_idx, :, : len(state_vars)]
+            - transform_intrinsic_to_kf(vp_trajectory)[:, : len(state_vars)]
+        )
+        logdet = abslogdet(
+            ensemble.ensemble_macrostate_cov[phenotype_idx, :, : len(state_vars), : len(state_vars)]
+        )
+        sigma_inv_delta = np.array(
             [
                 np.linalg.lstsq(
                     ensemble.ensemble_macrostate_cov[
-                        cycle, t_idx, : len(state_vars), : len(state_vars)
+                        phenotype_idx, t_idx, : len(state_vars), : len(state_vars)
                     ],
-                    delta_state[cycle, t_idx, :],
+                    delta_state[t_idx, :],
                     rcond=None,
                 )[0]
                 for t_idx in range(ensemble.ensemble_macrostate_cov.shape[1])
             ]
-            for cycle in range(NUM_CYCLES + 1)
-        ]
+        )
+        surprisal_quadratic_part = np.einsum("ti,ti->t", delta_state, sigma_inv_delta)
+        per_phenotype_surprisal_state[phenotype_idx, :] = (
+            surprisal_quadratic_part + logdet + np.log(2 * np.pi) * len(state_vars)
+        ) / 2.0
+
+    # noinspection PyUnresolvedReferences
+    surprisal_state = -logsumexp(
+        ensemble.log_phenotype_distribution_timeseries.T - per_phenotype_surprisal_state,
+        return_sign=False,
+        axis=0,
     )
-    surprisal_quadratic_part = np.einsum("cij,cij->ci", delta_state, sigma_inv_delta)
-    surprisal_state = (
-        surprisal_quadratic_part + logdet + len(state_vars) * np.log(2 * np.pi)
-    ) / 2.0
 
     #####
     # param surprisal: restrict to just the params
-    vp_param_trajectory = transform_intrinsic_to_kf(vp_trajectory)[:, len(state_vars) :]
-
-    delta_param = ensemble.ensemble_macrostate_mean[:, :, len(state_vars) :] - vp_param_trajectory
-    _, logdet = slogdet(
-        ensemble.ensemble_macrostate_cov[:, :, len(state_vars) :, len(state_vars) :]
-    )
-    sigma_inv_delta = np.array(
-        [
+    per_phenotype_surprisal_param = np.zeros(
+        (ensemble.num_phenotypes, ensemble.ensemble_macrostate_cov.shape[1]), dtype=np.float64
+    )  # (phenotype,time)
+    for phenotype_idx in range(ensemble.num_phenotypes):
+        delta_param = (
+            ensemble.ensemble_macrostate_mean[phenotype_idx, :, len(state_vars) :]
+            - transform_intrinsic_to_kf(vp_trajectory)[:, len(state_vars) :]
+        )
+        logdet = abslogdet(
+            ensemble.ensemble_macrostate_cov[phenotype_idx, :, len(state_vars) :, len(state_vars) :]
+        )
+        sigma_inv_delta = np.array(
             [
                 np.linalg.lstsq(
                     ensemble.ensemble_macrostate_cov[
-                        cycle, t_idx, len(state_vars) :, len(state_vars) :
+                        phenotype_idx, t_idx, len(state_vars) :, len(state_vars) :
                     ],
-                    delta_param[cycle, t_idx, :],
+                    delta_param[t_idx, :],
                     rcond=None,
                 )[0]
                 for t_idx in range(ensemble.ensemble_macrostate_cov.shape[1])
             ]
-            for cycle in range(NUM_CYCLES + 1)
-        ]
+        )
+        surprisal_quadratic_part = np.einsum("ti,ti->t", delta_param, sigma_inv_delta)
+        per_phenotype_surprisal_param[phenotype_idx, :] = (
+            surprisal_quadratic_part + logdet + np.log(2 * np.pi) * len(variational_params)
+        ) / 2.0
+
+    # noinspection PyUnresolvedReferences
+    surprisal_param = -logsumexp(
+        ensemble.log_phenotype_distribution_timeseries.T - per_phenotype_surprisal_param,
+        return_sign=False,
+        axis=0,
     )
-    surprisal_quadratic_part = np.einsum("cij,cij->ci", delta_param, sigma_inv_delta)
-    surprisal_param = (
-        surprisal_quadratic_part + logdet + len(variational_params) * np.log(2 * np.pi)
-    ) / 2.0
 
     ################################################################################
 
@@ -809,16 +840,13 @@ def main_cli():
         f["covs"].dims[3].label = "state component"
 
         f["surprisal_full"] = surprisal_full
-        f["surprisal_full"].dims[0].label = "kalman update number"
-        f["surprisal_full"].dims[1].label = "time"
+        f["surprisal_full"].dims[0].label = "time"
 
         f["surprisal_state"] = surprisal_state
-        f["surprisal_state"].dims[0].label = "kalman update number"
-        f["surprisal_state"].dims[1].label = "time"
+        f["surprisal_state"].dims[0].label = "time"
 
         f["surprisal_param"] = surprisal_param
-        f["surprisal_param"].dims[0].label = "kalman update number"
-        f["surprisal_param"].dims[1].label = "time"
+        f["surprisal_param"].dims[0].label = "time"
 
 
 # def model_ensemble_from(means, covariances, ensemble_size):

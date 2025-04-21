@@ -16,7 +16,7 @@ from phkf_ac.consts import (
     state_vars,
     variational_params,
 )
-from phkf_ac.util import gale_shapely_matching, model_macro_data, slogdet
+from phkf_ac.util import abslogdet, gale_shapely_matching, model_macro_data
 
 
 def normalize_dir_name(name: str) -> str:
@@ -57,8 +57,11 @@ class PhenotypeKFAnCockrell:
 
     # noinspection PyUnresolvedReferences
     @log_phenotype_distribution.default
-    def phenotype_distribution_default(self):
+    def log_phenotype_distribution_default(self):
         return np.log(np.full(self.num_phenotypes, 1 / self.num_phenotypes, dtype=np.float64))
+
+    # (time, phenotype)
+    log_phenotype_distribution_timeseries: np.ndarray = field(init=False)
 
     # in transformed coordinates
     observation_uncertainty_cov: np.ndarray = field()
@@ -151,6 +154,14 @@ class PhenotypeKFAnCockrell:
             )
         )
 
+        self.log_phenotype_distribution_timeseries = np.full(
+            (
+                self.end_time + 1,
+                self.num_phenotypes,
+            ),
+            self.log_phenotype_distribution,
+        )
+
         # TODO: consider per-phenotype initialization (Note that these aren't quite the same parameters, so this can't
         #  just be read from the existing data.)
         for phenotype_idx in range(self.num_phenotypes):
@@ -165,6 +176,14 @@ class PhenotypeKFAnCockrell:
                         model_macro_data(self.ensemble[phenotype_idx][model_idx])
                     )
                 )
+
+            self.ensemble_macrostate_mean[phenotype_idx, 0, :] = np.mean(
+                self.ensemble_macrostate[phenotype_idx, :, 0, :], axis=0
+            )
+            self.ensemble_macrostate_cov[phenotype_idx, 0, :, :] = np.cov(
+                self.ensemble_macrostate[phenotype_idx, :, 0, :],
+                rowvar=False,
+            )
 
         self._current_time = t
 
@@ -213,6 +232,11 @@ class PhenotypeKFAnCockrell:
             self.ensemble_macrostate_mean[phenotype_idx, :, :] = np.mean(
                 self.ensemble_macrostate[phenotype_idx, :, :, :], axis=0
             )
+            for time_idx in range(self._current_time + 1, t + 1):
+                self.ensemble_macrostate_cov[phenotype_idx, time_idx, :, :] = np.cov(
+                    self.ensemble_macrostate[phenotype_idx, :, time_idx, :],
+                    rowvar=False,
+                )
 
         if update_ensemble:
             self._current_time = t
@@ -223,6 +247,7 @@ class PhenotypeKFAnCockrell:
         observation_time: int,
         observation_types: List[str],
         measurements: np.ndarray,
+        previous_observation_time: int = -1,
         save_microstate_files: bool = False,
         log: bool = True,
     ) -> None:
@@ -232,6 +257,8 @@ class PhenotypeKFAnCockrell:
         :param observation_time: time of observation
         :param observation_types: list of measured quantities
         :param measurements: values of measured quantities
+        :param previous_observation_time: if the ensemble was updated elsewhere, give the prev. obs. time.
+        Otherwise, the ensemble's surrent time will be used.
         :param save_microstate_files: save projected/updated microstates
         :param log: print diagnostic messages
         :return: None
@@ -243,12 +270,13 @@ class PhenotypeKFAnCockrell:
         if log:
             print(f"Projecting ensemble to t={observation_time}", flush=True)
 
-        start_time = self._current_time
-        self.project_ensemble_to(
-            t=observation_time,
-            update_ensemble=True,
-            save_microstate_files=save_microstate_files,
-        )
+        if previous_observation_time < 0:
+            previous_observation_time = self._current_time
+            self.project_ensemble_to(
+                t=observation_time,
+                update_ensemble=True,
+                save_microstate_files=save_microstate_files,
+            )
 
         if log:
             print(f"Projecting ensemble to t={observation_time} (Finished)", flush=True)
@@ -271,7 +299,7 @@ class PhenotypeKFAnCockrell:
             UNIFIED_STATE_SPACE_DIMENSION,
         )
         # zero out values before and after the relevant time region
-        trajectory_region[:, :, :start_time, :] = 0
+        trajectory_region[:, :, :previous_observation_time, :] = 0
         trajectory_region[:, :, observation_time + 1 :, :] = 0
         reduced_states = np.einsum(
             "ij,pmj->pmi",
@@ -304,7 +332,7 @@ class PhenotypeKFAnCockrell:
                 log_weights[phenotype_idx, ensemble_idx] = (
                     -(
                         mean_difference_vec[phenotype_idx, ensemble_idx, :] @ temp
-                        + slogdet(self.phenotype_weight_covs[phenotype_idx])[1]
+                        + abslogdet(self.phenotype_weight_covs[phenotype_idx])
                     )
                     / 2.0
                 )
@@ -321,16 +349,16 @@ class PhenotypeKFAnCockrell:
         # compute weighted per-phenotype and per-time mean and covariance
         for phenotype_idx in range(self.num_phenotypes):
             weights = np.exp(log_weights[phenotype_idx, :])
-            self.ensemble_macrostate_mean[phenotype_idx, start_time : observation_time + 1, :] = (
-                np.average(
-                    self.ensemble_macrostate[
-                        phenotype_idx, :, start_time : observation_time + 1, :
-                    ],
-                    weights=weights,
-                    axis=0,
-                )
+            self.ensemble_macrostate_mean[
+                phenotype_idx, previous_observation_time : observation_time + 1, :
+            ] = np.average(
+                self.ensemble_macrostate[
+                    phenotype_idx, :, previous_observation_time : observation_time + 1, :
+                ],
+                weights=weights,
+                axis=0,
             )
-            for time_idx in range(start_time, observation_time + 1):
+            for time_idx in range(previous_observation_time, observation_time + 1):
                 self.ensemble_macrostate_cov[phenotype_idx, time_idx, :, :] = np.cov(
                     self.ensemble_macrostate[phenotype_idx, :, time_idx, :],
                     aweights=weights,
@@ -369,8 +397,8 @@ class PhenotypeKFAnCockrell:
             S = H @ P @ H.T + R
 
             self.log_phenotype_distribution[phenotype_idx] += (
-                -(v.T @ scipy.linalg.pinvh(S) @ v - slogdet(S)[1]) / 2
-            )
+                -(v.T @ scipy.linalg.pinvh(S) @ v + abslogdet(S)) / 2.0
+            )  # TODO: check formula (abslogdet sign?)
 
             K = P @ H.T @ np.linalg.pinv(S)
 
@@ -392,8 +420,13 @@ class PhenotypeKFAnCockrell:
         # Step 2c: Normalize overall phenotype probabilities
         self.log_phenotype_distribution -= logsumexp(self.log_phenotype_distribution)
 
-        # ######### Step 3: As in the unscented kalman filter, find the + of the new Gaussian's and best matching to
-        # the ensemble members
+        # update timeseries
+        self.log_phenotype_distribution_timeseries[observation_time:, :] = (
+            self.log_phenotype_distribution
+        )
+
+        # ######### Step 3: As in the unscented kalman filter, find the (2n+1)-point stencil of the new Gaussian's and
+        # best matching to the ensemble members
 
         ensemble_target_locs = np.zeros(
             (

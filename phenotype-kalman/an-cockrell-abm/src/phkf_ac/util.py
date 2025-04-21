@@ -1,9 +1,11 @@
+import itertools
 from typing import Final, Tuple
 
 import numpy as np
 from an_cockrell import AnCockrellModel
 from matplotlib import colors
 from perlin_noise import PerlinNoise
+from scipy.linalg import lu
 
 from phkf_ac.consts import UNIFIED_STATE_SPACE_DIMENSION, state_vars, variational_params
 
@@ -250,3 +252,21 @@ def slogdet(m: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     return signs, np.nan_to_num(
         np.sum(np.nan_to_num(np.log(np.maximum(1e-10, np.abs(evals)))), axis=-1)
     )
+
+
+def abslogdet(m: np.ndarray) -> np.ndarray:
+    """
+    Compute the log of the absolute value of the determinant. Adapted to singular case.
+
+    :param m: (..., M, M) array like
+    :return: abs-logdet
+    """
+    if len(m.shape) == 2:
+        *_, U = lu(m)
+        return np.sum(np.log(np.minimum(1e-10, np.abs(np.diag(U)))))
+    else:
+        ald = np.zeros(m.shape[:-2])
+        for idcs in itertools.product(*map(range, m.shape[:-2])):
+            *_, U = lu(m)
+            ald[idcs] = np.sum(np.log(np.minimum(1e-10, np.abs(np.diag(U)))))
+        return ald
