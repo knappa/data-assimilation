@@ -295,9 +295,6 @@ def main_cli():
             # advance ensemble of models
             previous_time = time
             time += SAMPLE_INTERVAL
-            print(f"{time=}")
-            if time >= ensemble.end_time:
-                print(f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {time=} {ensemble.end_time=}")
             time = np.min([ensemble.end_time, time])
             ensemble.project_ensemble_to(t=time, update_ensemble=True)
 
