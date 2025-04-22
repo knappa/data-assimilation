@@ -736,7 +736,7 @@ def main_cli():
 
     # noinspection PyUnresolvedReferences
     surprisal_full = -logsumexp(
-        ensemble.log_phenotype_distribution_timeseries.T - per_phenotype_surprisal_full,
+        ensemble.log_phenotype_distribution_timeseries - per_phenotype_surprisal_full,
         return_sign=False,
         axis=0,
     )
@@ -773,7 +773,7 @@ def main_cli():
 
     # noinspection PyUnresolvedReferences
     surprisal_state = -logsumexp(
-        ensemble.log_phenotype_distribution_timeseries.T - per_phenotype_surprisal_state,
+        ensemble.log_phenotype_distribution_timeseries - per_phenotype_surprisal_state,
         return_sign=False,
         axis=0,
     )
@@ -810,7 +810,7 @@ def main_cli():
 
     # noinspection PyUnresolvedReferences
     surprisal_param = -logsumexp(
-        ensemble.log_phenotype_distribution_timeseries.T - per_phenotype_surprisal_param,
+        ensemble.log_phenotype_distribution_timeseries - per_phenotype_surprisal_param,
         return_sign=False,
         axis=0,
     )
@@ -826,15 +826,19 @@ def main_cli():
         f["virtual_patient_trajectory"].dims[1].label = "state component"
 
         f["means"] = ensemble.ensemble_macrostate_mean
-        f["means"].dims[0].label = "kalman update number"
+        f["means"].dims[0].label = "phenotype"
         f["means"].dims[1].label = "time"
         f["means"].dims[2].label = "state component"
 
         f["covs"] = ensemble.ensemble_macrostate_cov
-        f["covs"].dims[0].label = "kalman update number"
+        f["covs"].dims[0].label = "phenotype"
         f["covs"].dims[1].label = "time"
         f["covs"].dims[2].label = "state component"
         f["covs"].dims[3].label = "state component"
+
+        f["log_phenotype_dist"] = ensemble.log_phenotype_distribution_timeseries
+        f["log_phenotype_dist"].dims[0].label = "phenotype"
+        f["log_phenotype_dist"].dims[1].label = "time"
 
         f["surprisal_full"] = surprisal_full
         f["surprisal_full"].dims[0].label = "time"

@@ -156,10 +156,10 @@ class PhenotypeKFAnCockrell:
 
         self.log_phenotype_distribution_timeseries = np.full(
             (
-                self.end_time + 1,
                 self.num_phenotypes,
+                self.end_time + 1,
             ),
-            self.log_phenotype_distribution,
+            self.log_phenotype_distribution[:, None],
         )
 
         # TODO: consider per-phenotype initialization (Note that these aren't quite the same parameters, so this can't
@@ -421,8 +421,8 @@ class PhenotypeKFAnCockrell:
         self.log_phenotype_distribution -= logsumexp(self.log_phenotype_distribution)
 
         # update timeseries
-        self.log_phenotype_distribution_timeseries[observation_time:, :] = (
-            self.log_phenotype_distribution
+        self.log_phenotype_distribution_timeseries[:, observation_time:] = (
+            self.log_phenotype_distribution[:, None]
         )
 
         # ######### Step 3: As in the unscented kalman filter, find the (2n+1)-point stencil of the new Gaussian's and
