@@ -211,7 +211,7 @@ def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, index=-1) -> np.ndar
     """
     if index == -1:
         # full state
-        retval = np.maximum(0.0, np.nan_to_num(np.exp(macrostate_kf) - __EPSILON__))
+        retval = np.clip(np.nan_to_num(np.exp(macrostate_kf) - __EPSILON__), 0.0, np.inf)
         # counts
         # retval[18:22] = np.nan_to_num(
         #     (51**2)
@@ -247,4 +247,4 @@ def transform_kf_to_intrinsic(macrostate_kf: np.ndarray, *, index=-1) -> np.ndar
         )
     else:
         # other parameters
-        return np.maximum(0.0, np.nan_to_num(np.exp(macrostate_kf) - __EPSILON__))
+        return np.clip(np.nan_to_num(np.exp(macrostate_kf) - __EPSILON__), 0.0, np.inf)

@@ -129,18 +129,6 @@ def model_macro_data(model: AnCockrellModel):
 ################################################################################
 
 
-def cov_cleanup(cov_mat: np.ndarray) -> np.ndarray:
-    # numerical cleanup: symmetrize and ensure pos def
-    cov_mat = np.nan_to_num(cov_mat, copy=True)
-    cov_mat[:, :] = (cov_mat + cov_mat.T) / 2.0
-
-    epsilon: Final[float] = 1e-6
-    return cov_mat - np.minimum(0.0, np.min(np.diag(cov_mat)) - epsilon)
-
-
-################################################################################
-
-
 def gale_shapely_matching(*, new_sample: np.ndarray, macro_data: np.ndarray) -> np.ndarray:
     """
     Compute a pairing of distribution samples to existing macroscale data that minimizes the pairwise distance using
@@ -250,7 +238,7 @@ def slogdet(m: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     signs = np.prod(np.sign(evals), axis=-1)
 
     return signs, np.nan_to_num(
-        np.sum(np.nan_to_num(np.log(np.maximum(1e-10, np.abs(evals)))), axis=-1)
+        np.sum(np.nan_to_num(np.log(np.clip(np.abs(evals), 1e-10, np.inf))), axis=-1)
     )
 
 
@@ -263,10 +251,10 @@ def abslogdet(m: np.ndarray) -> np.ndarray:
     """
     if len(m.shape) == 2:
         *_, U = lu(m)
-        return np.sum(np.log(np.minimum(1e-10, np.abs(np.diag(U)))))
+        return np.sum(np.log(np.clip(np.abs(np.diag(U)), 1e-10, np.inf)))
     else:
         ald = np.zeros(m.shape[:-2])
         for idcs in itertools.product(*map(range, m.shape[:-2])):
             *_, U = lu(m[idcs])
-            ald[idcs] = np.sum(np.log(np.maximum(1e-10, np.abs(np.diag(U)))))
+            ald[idcs] = np.sum(np.log(np.clip(np.abs(np.diag(U)), 1e-10, np.inf)))
         return ald

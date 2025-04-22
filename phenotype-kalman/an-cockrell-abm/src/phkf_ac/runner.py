@@ -341,8 +341,8 @@ class PhenotypeKFAnCockrell:
             log_weights[phenotype_idx, :] -= logsumexp(log_weights[phenotype_idx, :])
             # we don't want to weights to become excessively small as this can give a singular estimate
             # (can happen when one trajectory looks like a _really_ good match) so we cap and renormalize
-            log_weights[phenotype_idx, :] = np.maximum(
-                log_weights[phenotype_idx, :], -2 * np.log(self.ensemble_size)
+            log_weights[phenotype_idx, :] = np.clip(
+                log_weights[phenotype_idx, :], -2 * np.log(self.ensemble_size), 0.0
             )
             log_weights[phenotype_idx, :] -= logsumexp(log_weights[phenotype_idx, :])
 
@@ -537,8 +537,7 @@ class PhenotypeKFAnCockrell:
             )
             past_estimate_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL),
-                np.maximum(
-                    0.0,
+                np.clip(
                     self.transform_kf_to_intrinsic(
                         # TODO: indices
                         self.ensemble_macrostate_mean[cycle, : (cycle + 1) * SAMPLE_INTERVAL, idx]
@@ -549,6 +548,8 @@ class PhenotypeKFAnCockrell:
                         ),
                         index=idx,
                     ),
+                    0.0,
+                    np.inf,
                 ),
                 # np.minimum(
                 #     10 * max_scales[state_var_name],
@@ -581,7 +582,7 @@ class PhenotypeKFAnCockrell:
             )
             prediction_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                np.maximum(0.0, self.transform_kf_to_intrinsic(mu - sigma, index=idx)),
+                np.clip(self.transform_kf_to_intrinsic(mu - sigma, index=idx), 0.0, np.inf),
                 self.transform_kf_to_intrinsic(
                     mu + sigma,
                     index=idx,
@@ -681,8 +682,7 @@ class PhenotypeKFAnCockrell:
 
             past_estimate_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL),
-                np.maximum(
-                    0.0,
+                np.clip(
                     self.transform_kf_to_intrinsic(
                         # TODO: indices
                         self.ensemble_macrostate_mean[
@@ -698,6 +698,8 @@ class PhenotypeKFAnCockrell:
                         ),
                         index=len_state_vars + idx,
                     ),
+                    0.0,
+                    np.inf,
                 ),
                 self.transform_kf_to_intrinsic(
                     # TODO: indices
@@ -734,8 +736,7 @@ class PhenotypeKFAnCockrell:
 
             prediction_range = axs[row, col].fill_between(
                 range((cycle + 1) * SAMPLE_INTERVAL, TIME_SPAN + 1),
-                np.maximum(
-                    0.0,
+                np.clip(
                     self.transform_kf_to_intrinsic(
                         # TODO: indices
                         self.ensemble_macrostate_mean[
@@ -751,6 +752,8 @@ class PhenotypeKFAnCockrell:
                         ),
                         index=len_state_vars + idx,
                     ),
+                    0.0,
+                    np.inf,
                 ),
                 self.transform_kf_to_intrinsic(
                     # TODO: indices
