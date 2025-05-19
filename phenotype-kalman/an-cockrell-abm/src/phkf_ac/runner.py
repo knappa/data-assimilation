@@ -305,6 +305,8 @@ class PhenotypeKFAnCockrell:
         # zero out values before and after the relevant time region
         trajectory_region[:, :, :previous_observation_time, :] = 0
         trajectory_region[:, :, observation_time + 1 :, :] = 0
+
+        # compute reduction to pca space (3d)
         reduced_states = np.einsum(
             "ij,pmj->pmi",
             self.pca_matrix,  # [3,UNIFIED_STATE_SPACE_DIMENSION*dt]
@@ -313,15 +315,26 @@ class PhenotypeKFAnCockrell:
             ),  # [p,m,t,s] -> [p,m,j]
         )
         # print(f"{reduced_states.shape=}") # (4,81,3)
+
+        # zero out values past the initial conditions to get initial condition
+        trajectory_region[:, :, previous_observation_time + 1 :, :] = 0
+
+        # compute initial condition's reduction to pca space (3d)
+        reduced_states_init = np.einsum(
+            "ij,pmj->pmi",
+            self.pca_matrix,  # [3,UNIFIED_STATE_SPACE_DIMENSION*dt]
+            trajectory_region.reshape(
+                self.num_phenotypes, self.ensemble_size, -1
+            ),  # [p,m,t,s] -> [p,m,j]
+        )
+        # print(f"{reduced_states.shape=}") # (4,81,3)
+
         log_weights = np.zeros(
             (self.num_phenotypes, self.ensemble_size),
             dtype=np.float64,
         )
         # TODO: unscented weights?
         for ensemble_phenotype_idx in range(self.num_phenotypes):
-            mean_difference_vec = (
-                reduced_states - self.phenotype_weight_means[ensemble_phenotype_idx]
-            )
             # iterate over each member of a phenotype's ensemble
             for ensemble_idx in range(2 * UNIFIED_STATE_SPACE_DIMENSION + 1):
                 per_phenotype_log_weight = np.zeros(self.num_phenotypes, dtype=np.float64)
@@ -329,10 +342,10 @@ class PhenotypeKFAnCockrell:
                 # iterate over phenotypes
                 for phenotype_idx in range(self.num_phenotypes):
                     # log-probabilities for the initial (x_{k-1}) state of the trajectory
-                    initial_state_vec = mean_difference_vec[
-                        ensemble_phenotype_idx, ensemble_idx, :
-                    ].copy()
-                    initial_state_vec[previous_observation_time + 1 :] = 0
+                    initial_state_vec = (
+                        reduced_states_init[ensemble_phenotype_idx, ensemble_idx]
+                        - self.phenotype_weight_means[phenotype_idx]
+                    )
                     try:
                         temp = np.linalg.lstsq(
                             self.phenotype_weight_covs[phenotype_idx],
@@ -346,38 +359,37 @@ class PhenotypeKFAnCockrell:
                             @ initial_state_vec
                         )
                     # noinspection PyCallingNonCallable
-                    per_phenotype_log_weight_initial[phenotype_idx] = (
-                        -(
-                            initial_state_vec @ temp
-                            + abslogdet(self.phenotype_weight_covs[ensemble_phenotype_idx])
-                            + np.log(2 * np.pi) * UNIFIED_STATE_SPACE_DIMENSION
-                        )
-                        / 2.0
+                    per_phenotype_log_weight_initial[phenotype_idx] = -0.5 * (
+                        initial_state_vec @ temp
+                        + abslogdet(self.phenotype_weight_covs[ensemble_phenotype_idx])
+                        + np.log(2 * np.pi) * UNIFIED_STATE_SPACE_DIMENSION
                     )
 
                     # log-probabilities for the trajectory from the initial state, x_{k-1}, to x_{k+l}
+                    trajectory_vec = (
+                        reduced_states[ensemble_phenotype_idx, ensemble_idx]
+                        - self.phenotype_weight_means[phenotype_idx]
+                    )
                     try:
                         temp = np.linalg.lstsq(
                             self.phenotype_weight_covs[phenotype_idx],
-                            mean_difference_vec[ensemble_phenotype_idx, ensemble_idx, :],
+                            trajectory_vec,
                         )[0]
                     except LinAlgError:
                         temp = (
                             scipy.linalg.pinvh(
                                 self.phenotype_weight_covs[phenotype_idx], return_rank=False
                             )
-                            @ mean_difference_vec[ensemble_phenotype_idx, ensemble_idx, :]
+                            @ trajectory_vec
                         )
                     # noinspection PyCallingNonCallable
-                    per_phenotype_log_weight[phenotype_idx] = (
-                        -(
-                            mean_difference_vec[ensemble_phenotype_idx, ensemble_idx, :] @ temp
-                            + abslogdet(self.phenotype_weight_covs[ensemble_phenotype_idx])
-                            + np.log(2 * np.pi) * UNIFIED_STATE_SPACE_DIMENSION
-                        )
-                        / 2.0
+                    per_phenotype_log_weight[phenotype_idx] = -0.5 * (
+                        trajectory_vec @ temp
+                        + abslogdet(self.phenotype_weight_covs[ensemble_phenotype_idx])
+                        + np.log(2 * np.pi) * UNIFIED_STATE_SPACE_DIMENSION
                     )
 
+                # compute weights with normalization
                 log_weights[ensemble_phenotype_idx, ensemble_idx] = (
                     per_phenotype_log_weight[ensemble_phenotype_idx]
                     - per_phenotype_log_weight_initial[ensemble_phenotype_idx]
@@ -456,11 +468,11 @@ class PhenotypeKFAnCockrell:
             # TODO: figure out why pycharm thinks that np.log is not a function, but a boolean. Not python thinking
             #  that, pycharm.
             # noinspection PyCallingNonCallable
-            self.log_phenotype_distribution[phenotype_idx] -= (
+            self.log_phenotype_distribution[phenotype_idx] -= 0.5 * (
                 v.T @ scipy.linalg.pinvh(S) @ v
                 + abslogdet(S)
                 + np.log(2 * np.pi) * len(observation_types)
-            ) / 2.0
+            )
 
             K = P @ H.T @ np.linalg.pinv(S)
 
