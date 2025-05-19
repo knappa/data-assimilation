@@ -18,6 +18,8 @@ from phkf_ac.consts import (
 )
 from phkf_ac.util import abslogdet, gale_shapely_matching, model_macro_data
 
+__eigenvalue_epsilon__: float = 1e-6
+
 
 def normalize_dir_name(name: str) -> str:
     if name is None or len(name) == 0:
@@ -258,11 +260,13 @@ class PhenotypeKFAnCockrell:
         :param observation_types: list of measured quantities
         :param measurements: values of measured quantities
         :param previous_observation_time: if the ensemble was updated elsewhere, give the prev. obs. time.
-        Otherwise, the ensemble's surrent time will be used.
+        Otherwise, the ensemble's current time will be used.
         :param save_microstate_files: save projected/updated microstates
         :param log: print diagnostic messages
         :return: None
         """
+        from phkf_ac.util import pos_def_matrix_cleanup
+
         assert len(observation_types) == len(measurements)
         dim_observation = len(observation_types)
         assert observation_time >= self._current_time, "KF update cannot work backward in time"
@@ -282,7 +286,7 @@ class PhenotypeKFAnCockrell:
             print(f"Projecting ensemble to t={observation_time} (Finished)", flush=True)
 
         # ########## Step 1: assemble the predictive distributions from the ensemble macrostates from the previous
-        # observation time to the new observation time
+        # ########## observation time to the new observation time
 
         # Step 1a. Determine weights
         if log:
@@ -314,37 +318,90 @@ class PhenotypeKFAnCockrell:
             dtype=np.float64,
         )
         # TODO: unscented weights?
-        for phenotype_idx in range(self.num_phenotypes):
-            mean_difference_vec = reduced_states - self.phenotype_weight_means[phenotype_idx]
+        for ensemble_phenotype_idx in range(self.num_phenotypes):
+            mean_difference_vec = (
+                reduced_states - self.phenotype_weight_means[ensemble_phenotype_idx]
+            )
+            # iterate over each member of a phenotype's ensemble
             for ensemble_idx in range(2 * UNIFIED_STATE_SPACE_DIMENSION + 1):
-                try:
-                    temp = np.linalg.lstsq(
-                        self.phenotype_weight_covs[phenotype_idx],
-                        mean_difference_vec[phenotype_idx, ensemble_idx, :],
-                    )[0]
-                except LinAlgError:
-                    temp = (
-                        scipy.linalg.pinvh(
-                            self.phenotype_weight_covs[phenotype_idx], return_rank=False
+                per_phenotype_log_weight = np.zeros(self.num_phenotypes, dtype=np.float64)
+                per_phenotype_log_weight_initial = np.zeros(self.num_phenotypes, dtype=np.float64)
+                # iterate over phenotypes
+                for phenotype_idx in range(self.num_phenotypes):
+                    # log-probabilities for the initial (x_{k-1}) state of the trajectory
+                    initial_state_vec = mean_difference_vec[
+                        ensemble_phenotype_idx, ensemble_idx, :
+                    ].copy()
+                    initial_state_vec[previous_observation_time + 1 :] = 0
+                    try:
+                        temp = np.linalg.lstsq(
+                            self.phenotype_weight_covs[phenotype_idx],
+                            initial_state_vec,
+                        )[0]
+                    except LinAlgError:
+                        temp = (
+                            scipy.linalg.pinvh(
+                                self.phenotype_weight_covs[phenotype_idx], return_rank=False
+                            )
+                            @ initial_state_vec
                         )
-                        @ mean_difference_vec[phenotype_idx, ensemble_idx, :]
+                    # noinspection PyCallingNonCallable
+                    per_phenotype_log_weight_initial[phenotype_idx] = (
+                        -(
+                            initial_state_vec @ temp
+                            + abslogdet(self.phenotype_weight_covs[ensemble_phenotype_idx])
+                            + np.log(2 * np.pi) * UNIFIED_STATE_SPACE_DIMENSION
+                        )
+                        / 2.0
                     )
-                log_weights[phenotype_idx, ensemble_idx] = (
-                    -(
-                        mean_difference_vec[phenotype_idx, ensemble_idx, :] @ temp
-                        + abslogdet(self.phenotype_weight_covs[phenotype_idx])
+
+                    # log-probabilities for the trajectory from the initial state, x_{k-1}, to x_{k+l}
+                    try:
+                        temp = np.linalg.lstsq(
+                            self.phenotype_weight_covs[phenotype_idx],
+                            mean_difference_vec[ensemble_phenotype_idx, ensemble_idx, :],
+                        )[0]
+                    except LinAlgError:
+                        temp = (
+                            scipy.linalg.pinvh(
+                                self.phenotype_weight_covs[phenotype_idx], return_rank=False
+                            )
+                            @ mean_difference_vec[ensemble_phenotype_idx, ensemble_idx, :]
+                        )
+                    # noinspection PyCallingNonCallable
+                    per_phenotype_log_weight[phenotype_idx] = (
+                        -(
+                            mean_difference_vec[ensemble_phenotype_idx, ensemble_idx, :] @ temp
+                            + abslogdet(self.phenotype_weight_covs[ensemble_phenotype_idx])
+                            + np.log(2 * np.pi) * UNIFIED_STATE_SPACE_DIMENSION
+                        )
+                        / 2.0
                     )
-                    / 2.0
+
+                log_weights[ensemble_phenotype_idx, ensemble_idx] = (
+                    per_phenotype_log_weight[ensemble_phenotype_idx]
+                    - per_phenotype_log_weight_initial[ensemble_phenotype_idx]
+                    + logsumexp(
+                        per_phenotype_log_weight_initial
+                        + self.log_phenotype_distribution_timeseries[:, 0]
+                    )
+                    - logsumexp(
+                        per_phenotype_log_weight + self.log_phenotype_distribution_timeseries[:, 0]
+                    )
                 )
 
-            # normalize weights
-            log_weights[phenotype_idx, :] -= logsumexp(log_weights[phenotype_idx, :])
+            # normalize weights in the ensemble
+            log_weights[ensemble_phenotype_idx, :] -= logsumexp(
+                log_weights[ensemble_phenotype_idx, :]
+            )
             # we don't want to weights to become excessively small as this can give a singular estimate
             # (can happen when one trajectory looks like a _really_ good match) so we cap and renormalize
-            log_weights[phenotype_idx, :] = np.clip(
-                log_weights[phenotype_idx, :], -2 * np.log(self.ensemble_size), 0.0
+            log_weights[ensemble_phenotype_idx, :] = np.clip(
+                log_weights[ensemble_phenotype_idx, :], -2 * np.log(self.ensemble_size), 0.0
             )
-            log_weights[phenotype_idx, :] -= logsumexp(log_weights[phenotype_idx, :])
+            log_weights[ensemble_phenotype_idx, :] -= logsumexp(
+                log_weights[ensemble_phenotype_idx, :]
+            )
 
         # compute weighted per-phenotype and per-time mean and covariance
         for phenotype_idx in range(self.num_phenotypes):
@@ -396,9 +453,14 @@ class PhenotypeKFAnCockrell:
             v = observation - (H @ mu)
             S = H @ P @ H.T + R
 
-            self.log_phenotype_distribution[phenotype_idx] += (
-                -(v.T @ scipy.linalg.pinvh(S) @ v + abslogdet(S)) / 2.0
-            )  # TODO: check formula (abslogdet sign?)
+            # TODO: figure out why pycharm thinks that np.log is not a function, but a boolean. Not python thinking
+            #  that, pycharm.
+            # noinspection PyCallingNonCallable
+            self.log_phenotype_distribution[phenotype_idx] -= (
+                v.T @ scipy.linalg.pinvh(S) @ v
+                + abslogdet(S)
+                + np.log(2 * np.pi) * len(observation_types)
+            ) / 2.0
 
             K = P @ H.T @ np.linalg.pinv(S)
 
@@ -408,16 +470,17 @@ class PhenotypeKFAnCockrell:
             mu[:] += K @ v
             # Joseph form update (See e.g. https://www.anuncommonlab.com/articles/how-kalman-filters-work/part2.html)
             A = ident_matrix - K @ H
-            P[:, :] = np.nan_to_num(A @ P @ A.T + K @ R @ K.T)
+            P[:, :] = pos_def_matrix_cleanup(A @ P @ A.T + K @ R @ K.T, __eigenvalue_epsilon__)
 
-            # Make sure that the covariance matrix is on-the-nose symmetric
-            P[:, :] = np.nan_to_num((P + P.T) / 2.0)
-            # Make sure that the covariance matrix is positive definite
-            min_diag = np.min(np.diag(P))
-            if min_diag <= 1e-6:
-                P[:, :] += (1e-6 - min_diag) * ident_matrix
-
-        # Step 2c: Normalize overall phenotype probabilities
+        # Step 2c: Normalize overall phenotype probabilities and temper them so that phenotype probabilities never
+        # drop below a threshold or become overly certain.
+        self.log_phenotype_distribution -= logsumexp(self.log_phenotype_distribution)
+        np.clip(
+            self.log_phenotype_distribution,
+            np.log(0.01),
+            np.log(0.99),
+            out=self.log_phenotype_distribution,
+        )
         self.log_phenotype_distribution -= logsumexp(self.log_phenotype_distribution)
 
         # update timeseries
@@ -425,8 +488,8 @@ class PhenotypeKFAnCockrell:
             self.log_phenotype_distribution[:, None]
         )
 
-        # ######### Step 3: As in the unscented kalman filter, find the (2n+1)-point stencil of the new Gaussian's and
-        # best matching to the ensemble members
+        # ########## Step 3: As in the unscented kalman filter, find the (2n+1)-point stencil of the new Gaussian's and
+        # ########## best matching to the ensemble members
 
         ensemble_target_locs = np.zeros(
             (
@@ -837,10 +900,9 @@ def model_sigma_point_ensemble_from(means: np.ndarray, covariances: np.ndarray, 
     :return:
     """
     # make 100% sure of the covariance matrix
-    covariances = (covariances + covariances.T) / 2
-    min_diag = np.min(np.diag(covariances))
-    if min_diag < 1e-6:
-        covariances += (1e-6 - min_diag) * np.identity(covariances.shape[0])
+    from phkf_ac.util import pos_def_matrix_cleanup
+
+    covariances = pos_def_matrix_cleanup(covariances, __eigenvalue_epsilon__)
 
     # get principal axes
     U, S, Vh = np.linalg.svd(covariances, full_matrices=True, compute_uv=True, hermitian=True)

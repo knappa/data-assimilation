@@ -1,5 +1,5 @@
 import itertools
-from typing import Final, Tuple
+from typing import Tuple
 
 import numpy as np
 from an_cockrell import AnCockrellModel
@@ -28,6 +28,7 @@ cmap = colors.ListedColormap(
         clr_hex(204, 121, 167),
     ]
 )
+
 
 ################################################################################
 
@@ -222,6 +223,21 @@ def fix_title(s: str, *, break_len=14):
         if idx != -1:
             s = s[:idx] + "\n" + s[idx + 1 :]
     return s
+
+
+################################################################################
+
+
+def pos_def_matrix_cleanup(m: np.ndarray, epsilon: float) -> np.ndarray:
+    # clean up any nan's, infinities, etc.
+    m = np.nan_to_num(m)
+    # Make sure that the matrix is on-the-nose symmetric
+    m = np.nan_to_num((m + m.T) / 2.0)
+    # Make sure that the matrix is positive definite
+    min_diag = np.min(np.diag(m))
+    if min_diag <= epsilon:
+        m[:, :] += (epsilon - min_diag) * np.identity(m.shape[0])
+    return m
 
 
 ################################################################################
