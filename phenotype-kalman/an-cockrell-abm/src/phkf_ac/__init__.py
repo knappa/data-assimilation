@@ -11,7 +11,6 @@ def main_cli():
     import h5py
     import matplotlib.pyplot as plt
     import numpy as np
-    from scipy.special import logsumexp
     from scipy.stats import multivariate_normal
     from tqdm.auto import tqdm
 
@@ -164,42 +163,36 @@ def main_cli():
     NUM_CYCLES: Final[int] = TIME_SPAN // SAMPLE_INTERVAL
 
     ################################################################################
-    # statistical parameters
-
-    init_mean_vec = np.array(
-        [default_params[param] for param in (init_only_params + variational_params)]
-    )
-
-    init_cov_matrix = np.diag(
-        np.array(
-            [
-                0.5 * np.sqrt(default_params[param])
-                for param in (init_only_params + variational_params)
-            ]
-        )
-    )
-
-    ################################################################################
     # sample a virtual patient
 
-    # sampled virtual patient parameters
+    # sample virtual patient parameters
     vp_init_params = default_params.copy()
     vp_init_param_sample = np.abs(
-        multivariate_normal(mean=init_mean_vec, cov=init_cov_matrix).rvs()
+        multivariate_normal(
+            mean=np.array(
+                [default_params[param] for param in (init_only_params + variational_params)]
+            ),
+            cov=np.diag(
+                np.array(
+                    [
+                        0.5 * np.sqrt(default_params[param])
+                        for param in (init_only_params + variational_params)
+                    ]
+                )
+            ),
+        ).rvs()
     )
     for sample_component, param_name in zip(
         vp_init_param_sample,
         (init_only_params + variational_params),
     ):
         vp_init_params[param_name] = (
-            int(round(sample_component))
+            max(0, int(round(sample_component)))
             if isinstance(default_params[param_name], int)
-            else sample_component
+            else np.clip(sample_component, 0.0, np.inf)
         )
 
     # create model for virtual patient
-    # rng = np.random.default_rng()
-    # virtual_patient_model = an_cockrell.AnCockrellModel(rng=rng, **vp_init_params)
     virtual_patient_model = an_cockrell.AnCockrellModel(**vp_init_params)
 
     # evaluate the virtual patient's trajectory
@@ -256,6 +249,10 @@ def main_cli():
         phenotype_weight_means = h5file["phenotype_weight_means"][:]
         phenotype_weight_covs = h5file["phenotype_weight_covs"][:, :]
 
+    with h5py.File(files("phkf_ac.data").joinpath("log_phenotype_params.hdf5"), "r") as h5file:
+        phenotype_param_means_of_log = h5file["mean_of_log"][()]
+        phenotype_param_cov_of_log = h5file["cov_of_log"][()]
+
     ensemble = PhenotypeKFAnCockrell(
         num_phenotypes=4,
         pca_center=pca_center,
@@ -280,8 +277,15 @@ def main_cli():
 
     # create ensemble of models for kalman filter
     time = 0
+    init_mean_vec = np.log(np.array([default_params[param] for param in init_only_params]))
+    init_cov_matrix = np.diag(np.array([0.25 for _ in init_only_params]))
+
     ensemble.initialize_ensemble(
-        initialization_means=init_mean_vec, initialization_covs=init_cov_matrix, t=time
+        initialization_means_of_log=init_mean_vec,
+        initialization_covs_of_log=init_cov_matrix,
+        phenotype_param_means_of_log=phenotype_param_means_of_log,
+        phenotype_param_cov_of_log=phenotype_param_cov_of_log,
+        t=time,
     )
 
     if log:

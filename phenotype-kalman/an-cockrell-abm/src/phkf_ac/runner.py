@@ -1,6 +1,7 @@
 from copy import deepcopy
 from typing import Callable, Final, List, Optional, Tuple
 
+import h5py
 import numpy as np
 import scipy
 from an_cockrell import AnCockrellModel
@@ -125,14 +126,22 @@ class PhenotypeKFAnCockrell:
         # TODO: if the per_phenotype_means/covs is only for 1 phenotype, expand it to all N equally
 
     def initialize_ensemble(
-        self, *, initialization_means: np.ndarray, initialization_covs: np.ndarray, t: int = 0
+        self,
+        *,
+        initialization_means_of_log: np.ndarray,
+        initialization_covs_of_log: np.ndarray,
+        phenotype_param_means_of_log: np.ndarray,
+        phenotype_param_cov_of_log: np.ndarray,
+        t: int = 0,
     ) -> None:
         """
         Initialize the ensemble. Note that the initialization parameters are, while related, not the same as the state
         parameters.
 
-        :param initialization_means:
-        :param initialization_covs:
+        :param initialization_means_of_log: mean of the log of initialization only parameters
+        :param initialization_covs_of_log: covariance of the log of initialization only parameters
+        :param phenotype_param_means_of_log: mean of the log of general parameters
+        :param phenotype_param_cov_of_log: covariance of the log of general parameters
         :param t: initial time (default 0)
         :return:
         """
@@ -167,9 +176,30 @@ class PhenotypeKFAnCockrell:
         # TODO: consider per-phenotype initialization (Note that these aren't quite the same parameters, so this can't
         #  just be read from the existing data.)
         for phenotype_idx in range(self.num_phenotypes):
+            phenotype_mean_of_log = np.concatenate(
+                (initialization_means_of_log, phenotype_param_means_of_log[phenotype_idx]), axis=0
+            )
+            phenotype_cov_of_log = np.zeros(
+                (
+                    initialization_covs_of_log.shape[0]
+                    + phenotype_param_cov_of_log[phenotype_idx].shape[0],
+                    initialization_covs_of_log.shape[1]
+                    + phenotype_param_cov_of_log[phenotype_idx].shape[1],
+                ),
+                dtype=np.float64,
+            )
+            phenotype_cov_of_log[
+                : initialization_covs_of_log.shape[0], : initialization_covs_of_log.shape[1]
+            ] = initialization_covs_of_log
+            phenotype_cov_of_log[
+                initialization_covs_of_log.shape[0] :, initialization_covs_of_log.shape[1] :
+            ] = phenotype_param_cov_of_log[phenotype_idx]
             self.ensemble.append(
                 model_sigma_point_ensemble_from(
-                    initialization_means, initialization_covs, 1 + 2 * UNIFIED_STATE_SPACE_DIMENSION
+                    phenotype_mean_of_log,
+                    phenotype_cov_of_log,
+                    1 + 2 * UNIFIED_STATE_SPACE_DIMENSION,
+                    log_coordinates=True,
                 )
             )
             for model_idx in range(self.ensemble_size):
@@ -892,7 +922,7 @@ def model_sigma_point_ensemble_from_helper(params: np.ndarray):
         (init_only_params + variational_params),
     ):
         model_param_dict[parameter_name] = (
-            round(max(0, sample_component))
+            int(round(max(0, sample_component)))
             if isinstance(default_params[parameter_name], int)
             else max(0.0, sample_component)
         )
@@ -901,7 +931,9 @@ def model_sigma_point_ensemble_from_helper(params: np.ndarray):
     return model
 
 
-def model_sigma_point_ensemble_from(means: np.ndarray, covariances: np.ndarray, count: int):
+def model_sigma_point_ensemble_from(
+    means: np.ndarray, covariances: np.ndarray, count: int, log_coordinates: bool = False
+):
     """
     Create an ensemble of models from a distribution. Uses init-only
     and variational parameters
@@ -922,8 +954,12 @@ def model_sigma_point_ensemble_from(means: np.ndarray, covariances: np.ndarray, 
 
     mdl_ensemble = [model_sigma_point_ensemble_from_helper(means)]
     for axis in axes:
-        mdl_ensemble.append(model_sigma_point_ensemble_from_helper(means + axis))
-        mdl_ensemble.append(model_sigma_point_ensemble_from_helper(means - axis))
+        if log_coordinates:
+            mdl_ensemble.append(model_sigma_point_ensemble_from_helper(np.exp(means + axis)))
+            mdl_ensemble.append(model_sigma_point_ensemble_from_helper(np.exp(means - axis)))
+        else:
+            mdl_ensemble.append(model_sigma_point_ensemble_from_helper(means + axis))
+            mdl_ensemble.append(model_sigma_point_ensemble_from_helper(means - axis))
 
     if len(mdl_ensemble) >= count:
         return mdl_ensemble[:count]
@@ -938,7 +974,12 @@ def model_sigma_point_ensemble_from(means: np.ndarray, covariances: np.ndarray, 
         if norm_offset > 1:
             offset /= norm_offset
 
-        mdl_ensemble.append(model_sigma_point_ensemble_from_helper(means + axes @ offset))
+        if log_coordinates:
+            mdl_ensemble.append(
+                model_sigma_point_ensemble_from_helper(np.exp(means + axes @ offset))
+            )
+        else:
+            mdl_ensemble.append(model_sigma_point_ensemble_from_helper(means + axes @ offset))
 
     return mdl_ensemble
 
