@@ -11,6 +11,7 @@ def main_cli():
     import h5py
     import matplotlib.pyplot as plt
     import numpy as np
+    from scipy.sparse import load_npz
     from scipy.special import logsumexp
     from scipy.stats import multivariate_normal
     from tqdm.auto import tqdm
@@ -244,11 +245,15 @@ def main_cli():
         print("Loading phenotype data", end="")
     from importlib.resources import files
 
-    with h5py.File(files("phkf_ac.data").joinpath("phenotype-statistics.hdf5"), "r") as h5file:
-        pca_center = h5file["pca_center"][:]
-        pca_matrix = h5file["pca_matrix"][:, :]
-        phenotype_weight_means = h5file["phenotype_weight_means"][:]
-        phenotype_weight_covs = h5file["phenotype_weight_covs"][:, :]
+    with h5py.File(files("phkf_ac.data").joinpath("full_phenotype_means.hdf5")) as h5file:
+        phenotype_weight_means = h5file["phenotype_means"]
+
+    phenotype_weight_covs = []
+    # TODO: do not hard-code 4
+    for phenotype_idx in range(4):
+        phenotype_weight_covs.append(
+            load_npz(files("phkf_ac.data").joinpath("full_phenotype_means.hdf5"))
+        )
 
     with h5py.File(files("phkf_ac.data").joinpath("log_phenotype_params.hdf5"), "r") as h5file:
         phenotype_param_means_of_log = h5file["mean_of_log"][()]
@@ -256,8 +261,6 @@ def main_cli():
 
     ensemble = PhenotypeKFAnCockrell(
         num_phenotypes=4,
-        pca_center=pca_center,
-        pca_matrix=pca_matrix,
         phenotype_weight_means=phenotype_weight_means,
         phenotype_weight_covs=phenotype_weight_covs,
         model_modification_algorithm=modify_model,

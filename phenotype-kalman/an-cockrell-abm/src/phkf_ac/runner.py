@@ -7,6 +7,7 @@ import scipy
 from an_cockrell import AnCockrellModel
 from attrs import define, field
 from numpy.linalg import LinAlgError
+from scipy.sparse import coo_matrix
 from scipy.special import logsumexp
 
 from phkf_ac.consts import (
@@ -35,7 +36,6 @@ class PhenotypeKFAnCockrell:
     """
 
     :param num_phenotypes:
-    :param pca_matrix:
     :param phenotype_weight_means:
     :param phenotype_weight_covs:
     :param observation_uncertainty_cov:
@@ -47,13 +47,8 @@ class PhenotypeKFAnCockrell:
     transform_intrinsic_to_kf: Optional[Callable] = field(init=True)
     transform_kf_to_intrinsic: Optional[Callable] = field(init=True)
 
-    # PCA from 2017*40 dimensions to 3 by matrix C (3,2017*40) with center m (2017*40,)
-    # then each phenotype_i from gaussian with mean m_i (3,) and cov P_i (3,3)
-    # P(phi_i | x) = exp( -(1/2) (C(x-m)-m_i)^T P_i^{-1} (C(x-m)-m_i) ) / sum_i P(\phi_i | x)
-    pca_center: np.ndarray = field(init=True)
-    pca_matrix: np.ndarray = field(init=True)
     phenotype_weight_means: np.ndarray = field(init=True)
-    phenotype_weight_covs: np.ndarray = field(init=True)
+    phenotype_weight_covs: List[coo_matrix] = field(init=True)
 
     # phenotype distributions
     log_phenotype_distribution: np.ndarray = field()
@@ -98,14 +93,13 @@ class PhenotypeKFAnCockrell:
         assert (
             self.num_phenotypes
             == self.phenotype_weight_means.shape[0]
-            == self.phenotype_weight_covs.shape[0]
+            == len(self.phenotype_weight_covs)
             == self.log_phenotype_distribution.shape[0]
         ), "mismatch in number of phenotypes"
-        assert (
-            self.phenotype_weight_means.shape[1]
-            == self.phenotype_weight_covs.shape[1]
-            == self.phenotype_weight_covs.shape[2]
-        ), "dimension mismatch"
+        for cov in self.phenotype_weight_covs:
+            assert (
+                self.phenotype_weight_means.shape[1] == cov.shape[0] == cov.shape[1]
+            ), "dimension mismatch"
 
         # check the R matrix (observation uncertainty)
         # if it is a vector, bump it up to a diagonal matrix
@@ -322,48 +316,27 @@ class PhenotypeKFAnCockrell:
         if log:
             print(f"Determining weights", end="", flush=True)
 
-        # center the trajectories on the PCA's mean
-        trajectory_region = (
-            self.ensemble_macrostate.reshape(self.num_phenotypes, self.ensemble_size, -1)
-            - self.pca_center
-        ).reshape(
-            self.num_phenotypes,
-            self.ensemble_size,
-            self.end_time + 1,
-            UNIFIED_STATE_SPACE_DIMENSION,
-        )
-        # zero out values before and after the relevant time region
-        trajectory_region[:, :, :previous_observation_time, :] = 0
-        trajectory_region[:, :, observation_time + 1 :, :] = 0
-
-        # compute reduction to pca space (3d)
-        reduced_states = np.einsum(
-            "ij,pmj->pmi",
-            self.pca_matrix,  # [3,UNIFIED_STATE_SPACE_DIMENSION*dt]
-            trajectory_region.reshape(
-                self.num_phenotypes, self.ensemble_size, -1
-            ),  # [p,m,t,s] -> [p,m,j]
-        )
-        # print(f"{reduced_states.shape=}") # (4,81,3)
-
-        # zero out values past the initial conditions to get initial condition
-        trajectory_region[:, :, previous_observation_time + 1 :, :] = 0
-
-        # compute initial condition's reduction to pca space (3d)
-        reduced_states_init = np.einsum(
-            "ij,pmj->pmi",
-            self.pca_matrix,  # [3,UNIFIED_STATE_SPACE_DIMENSION*dt]
-            trajectory_region.reshape(
-                self.num_phenotypes, self.ensemble_size, -1
-            ),  # [p,m,t,s] -> [p,m,j]
-        )
-        # print(f"{reduced_states.shape=}") # (4,81,3)
-
         log_weights = np.zeros(
             (self.num_phenotypes, self.ensemble_size),
             dtype=np.float64,
         )
         # TODO: unscented weights?
+        phenotype_covs_trajectory = [
+            self.phenotype_weight_covs[phenotype_idx][
+                UNIFIED_STATE_SPACE_DIMENSION
+                * previous_observation_time : UNIFIED_STATE_SPACE_DIMENSION
+                * (observation_time + 1)
+            ].todense()
+            for phenotype_idx in range(self.num_phenotypes)
+        ]
+        phenotype_covs_init = [
+            self.phenotype_weight_covs[phenotype_idx][
+                UNIFIED_STATE_SPACE_DIMENSION
+                * previous_observation_time : UNIFIED_STATE_SPACE_DIMENSION
+                * (previous_observation_time + 1)
+            ].todense()
+            for phenotype_idx in range(self.num_phenotypes)
+        ]
         for ensemble_phenotype_idx in range(self.num_phenotypes):
             # iterate over each member of a phenotype's ensemble
             for ensemble_idx in range(2 * UNIFIED_STATE_SPACE_DIMENSION + 1):
@@ -373,49 +346,57 @@ class PhenotypeKFAnCockrell:
                 for phenotype_idx in range(self.num_phenotypes):
                     # log-probabilities for the initial (x_{k-1}) state of the trajectory
                     initial_state_vec = (
-                        reduced_states_init[ensemble_phenotype_idx, ensemble_idx]
-                        - self.phenotype_weight_means[phenotype_idx]
+                        self.ensemble_macrostate[
+                            ensemble_phenotype_idx, ensemble_idx, previous_observation_time, :
+                        ]
+                        - self.phenotype_weight_means[phenotype_idx, previous_observation_time, :]
                     )
                     try:
                         temp = np.linalg.lstsq(
-                            self.phenotype_weight_covs[phenotype_idx],
+                            phenotype_covs_init[phenotype_idx],
                             initial_state_vec,
                         )[0]
                     except LinAlgError:
                         temp = (
                             scipy.linalg.pinvh(
-                                self.phenotype_weight_covs[phenotype_idx], return_rank=False
+                                phenotype_covs_init[phenotype_idx], return_rank=False
                             )
                             @ initial_state_vec
                         )
                     # noinspection PyCallingNonCallable
                     per_phenotype_log_weight_initial[phenotype_idx] = -0.5 * (
                         initial_state_vec @ temp
-                        + abslogdet(self.phenotype_weight_covs[ensemble_phenotype_idx])
+                        + abslogdet(phenotype_covs_init[phenotype_idx])
                         + np.log(2 * np.pi) * UNIFIED_STATE_SPACE_DIMENSION
                     )
 
                     # log-probabilities for the trajectory from the initial state, x_{k-1}, to x_{k+l}
-                    trajectory_vec = (
-                        reduced_states[ensemble_phenotype_idx, ensemble_idx]
-                        - self.phenotype_weight_means[phenotype_idx]
+                    trajectory_vec = self.ensemble_macrostate[
+                        ensemble_phenotype_idx,
+                        ensemble_idx,
+                        previous_observation_time : observation_time + 1,
+                        :,
+                    ].reshape(-1) - self.phenotype_weight_means[
+                        phenotype_idx, previous_observation_time : observation_time + 1, :
+                    ].reshape(
+                        -1
                     )
                     try:
                         temp = np.linalg.lstsq(
-                            self.phenotype_weight_covs[phenotype_idx],
+                            phenotype_covs_trajectory[phenotype_idx],
                             trajectory_vec,
                         )[0]
                     except LinAlgError:
                         temp = (
                             scipy.linalg.pinvh(
-                                self.phenotype_weight_covs[phenotype_idx], return_rank=False
+                                phenotype_covs_trajectory[phenotype_idx], return_rank=False
                             )
                             @ trajectory_vec
                         )
                     # noinspection PyCallingNonCallable
                     per_phenotype_log_weight[phenotype_idx] = -0.5 * (
                         trajectory_vec @ temp
-                        + abslogdet(self.phenotype_weight_covs[ensemble_phenotype_idx])
+                        + abslogdet(phenotype_covs_trajectory[phenotype_idx])
                         + np.log(2 * np.pi) * UNIFIED_STATE_SPACE_DIMENSION
                     )
 
@@ -941,6 +922,7 @@ def model_sigma_point_ensemble_from(
     :param means:
     :param covariances:
     :param count: number of ensemble members
+    :param log_coordinates: if True, mean/cov parameters are for a log-normal distribution
     :return:
     """
     # make 100% sure of the covariance matrix
