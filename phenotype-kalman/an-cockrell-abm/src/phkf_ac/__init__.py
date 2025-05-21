@@ -246,21 +246,21 @@ def main_cli():
     from importlib.resources import files
 
     with h5py.File(files("phkf_ac.data").joinpath("full_phenotype_means.hdf5")) as h5file:
-        phenotype_weight_means = h5file["phenotype_means"]
+        phenotype_weight_means = h5file["phenotype_means"][()]
 
-    phenotype_weight_covs = []
-    # TODO: do not hard-code 4
-    for phenotype_idx in range(4):
-        phenotype_weight_covs.append(
-            load_npz(files("phkf_ac.data").joinpath("full_phenotype_means.hdf5"))
-        )
+    num_phenotypes = 4
+
+    phenotype_weight_covs = [
+        load_npz(files("phkf_ac.data").joinpath(f"full_phenotype-cov-{phenotype_idx}.npz")).tocsr()
+        for phenotype_idx in range(num_phenotypes)
+    ]
 
     with h5py.File(files("phkf_ac.data").joinpath("log_phenotype_params.hdf5"), "r") as h5file:
         phenotype_param_means_of_log = h5file["mean_of_log"][()]
         phenotype_param_cov_of_log = h5file["cov_of_log"][()]
 
     ensemble = PhenotypeKFAnCockrell(
-        num_phenotypes=4,
+        num_phenotypes=num_phenotypes,
         phenotype_weight_means=phenotype_weight_means,
         phenotype_weight_covs=phenotype_weight_covs,
         model_modification_algorithm=modify_model,

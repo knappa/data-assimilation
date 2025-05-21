@@ -7,7 +7,7 @@ import scipy
 from an_cockrell import AnCockrellModel
 from attrs import define, field
 from numpy.linalg import LinAlgError
-from scipy.sparse import coo_matrix
+from scipy.sparse import csr_array
 from scipy.special import logsumexp
 
 from phkf_ac.consts import (
@@ -48,7 +48,7 @@ class PhenotypeKFAnCockrell:
     transform_kf_to_intrinsic: Optional[Callable] = field(init=True)
 
     phenotype_weight_means: np.ndarray = field(init=True)
-    phenotype_weight_covs: List[coo_matrix] = field(init=True)
+    phenotype_weight_covs: List[csr_array] = field(init=True)
 
     # phenotype distributions
     log_phenotype_distribution: np.ndarray = field()
@@ -98,7 +98,7 @@ class PhenotypeKFAnCockrell:
         ), "mismatch in number of phenotypes"
         for cov in self.phenotype_weight_covs:
             assert (
-                self.phenotype_weight_means.shape[1] == cov.shape[0] == cov.shape[1]
+                np.prod(self.phenotype_weight_means.shape[1:]) == cov.shape[0] == cov.shape[1]
             ), "dimension mismatch"
 
         # check the R matrix (observation uncertainty)
@@ -316,115 +316,7 @@ class PhenotypeKFAnCockrell:
         if log:
             print(f"Determining weights", end="", flush=True)
 
-        log_weights = np.zeros(
-            (self.num_phenotypes, self.ensemble_size),
-            dtype=np.float64,
-        )
-        # TODO: unscented weights?
-        phenotype_covs_trajectory = [
-            self.phenotype_weight_covs[phenotype_idx][
-                UNIFIED_STATE_SPACE_DIMENSION
-                * previous_observation_time : UNIFIED_STATE_SPACE_DIMENSION
-                * (observation_time + 1)
-            ].todense()
-            for phenotype_idx in range(self.num_phenotypes)
-        ]
-        phenotype_covs_init = [
-            self.phenotype_weight_covs[phenotype_idx][
-                UNIFIED_STATE_SPACE_DIMENSION
-                * previous_observation_time : UNIFIED_STATE_SPACE_DIMENSION
-                * (previous_observation_time + 1)
-            ].todense()
-            for phenotype_idx in range(self.num_phenotypes)
-        ]
-        for ensemble_phenotype_idx in range(self.num_phenotypes):
-            # iterate over each member of a phenotype's ensemble
-            for ensemble_idx in range(2 * UNIFIED_STATE_SPACE_DIMENSION + 1):
-                per_phenotype_log_weight = np.zeros(self.num_phenotypes, dtype=np.float64)
-                per_phenotype_log_weight_initial = np.zeros(self.num_phenotypes, dtype=np.float64)
-                # iterate over phenotypes
-                for phenotype_idx in range(self.num_phenotypes):
-                    # log-probabilities for the initial (x_{k-1}) state of the trajectory
-                    initial_state_vec = (
-                        self.ensemble_macrostate[
-                            ensemble_phenotype_idx, ensemble_idx, previous_observation_time, :
-                        ]
-                        - self.phenotype_weight_means[phenotype_idx, previous_observation_time, :]
-                    )
-                    try:
-                        temp = np.linalg.lstsq(
-                            phenotype_covs_init[phenotype_idx],
-                            initial_state_vec,
-                        )[0]
-                    except LinAlgError:
-                        temp = (
-                            scipy.linalg.pinvh(
-                                phenotype_covs_init[phenotype_idx], return_rank=False
-                            )
-                            @ initial_state_vec
-                        )
-                    # noinspection PyCallingNonCallable
-                    per_phenotype_log_weight_initial[phenotype_idx] = -0.5 * (
-                        initial_state_vec @ temp
-                        + abslogdet(phenotype_covs_init[phenotype_idx])
-                        + np.log(2 * np.pi) * UNIFIED_STATE_SPACE_DIMENSION
-                    )
-
-                    # log-probabilities for the trajectory from the initial state, x_{k-1}, to x_{k+l}
-                    trajectory_vec = self.ensemble_macrostate[
-                        ensemble_phenotype_idx,
-                        ensemble_idx,
-                        previous_observation_time : observation_time + 1,
-                        :,
-                    ].reshape(-1) - self.phenotype_weight_means[
-                        phenotype_idx, previous_observation_time : observation_time + 1, :
-                    ].reshape(
-                        -1
-                    )
-                    try:
-                        temp = np.linalg.lstsq(
-                            phenotype_covs_trajectory[phenotype_idx],
-                            trajectory_vec,
-                        )[0]
-                    except LinAlgError:
-                        temp = (
-                            scipy.linalg.pinvh(
-                                phenotype_covs_trajectory[phenotype_idx], return_rank=False
-                            )
-                            @ trajectory_vec
-                        )
-                    # noinspection PyCallingNonCallable
-                    per_phenotype_log_weight[phenotype_idx] = -0.5 * (
-                        trajectory_vec @ temp
-                        + abslogdet(phenotype_covs_trajectory[phenotype_idx])
-                        + np.log(2 * np.pi) * UNIFIED_STATE_SPACE_DIMENSION
-                    )
-
-                # compute weights with normalization
-                log_weights[ensemble_phenotype_idx, ensemble_idx] = (
-                    per_phenotype_log_weight[ensemble_phenotype_idx]
-                    - per_phenotype_log_weight_initial[ensemble_phenotype_idx]
-                    + logsumexp(
-                        per_phenotype_log_weight_initial
-                        + self.log_phenotype_distribution_timeseries[:, 0]
-                    )
-                    - logsumexp(
-                        per_phenotype_log_weight + self.log_phenotype_distribution_timeseries[:, 0]
-                    )
-                )
-
-            # normalize weights in the ensemble
-            log_weights[ensemble_phenotype_idx, :] -= logsumexp(
-                log_weights[ensemble_phenotype_idx, :]
-            )
-            # we don't want to weights to become excessively small as this can give a singular estimate
-            # (can happen when one trajectory looks like a _really_ good match) so we cap and renormalize
-            log_weights[ensemble_phenotype_idx, :] = np.clip(
-                log_weights[ensemble_phenotype_idx, :], -2 * np.log(self.ensemble_size), 0.0
-            )
-            log_weights[ensemble_phenotype_idx, :] -= logsumexp(
-                log_weights[ensemble_phenotype_idx, :]
-            )
+        log_weights = self.compute_weights(observation_time, previous_observation_time)
 
         # compute weighted per-phenotype and per-time mean and covariance
         for phenotype_idx in range(self.num_phenotypes):
@@ -581,6 +473,134 @@ class PhenotypeKFAnCockrell:
         # previous_time = self._current_time
         self._current_time = observation_time
         self._kf_iteration += 1
+
+    def compute_weights(self, observation_time, previous_observation_time):
+        from phkf_ac.util import pos_def_matrix_cleanup
+
+        log_weights = np.zeros(
+            (self.num_phenotypes, self.ensemble_size),
+            dtype=np.float64,
+        )
+        # TODO: unscented weights?
+        phenotype_covs_trajectory = [
+            pos_def_matrix_cleanup(
+                self.phenotype_weight_covs[phenotype_idx][
+                    UNIFIED_STATE_SPACE_DIMENSION
+                    * previous_observation_time : UNIFIED_STATE_SPACE_DIMENSION
+                    * (observation_time + 1),
+                    UNIFIED_STATE_SPACE_DIMENSION
+                    * previous_observation_time : UNIFIED_STATE_SPACE_DIMENSION
+                    * (observation_time + 1),
+                ].todense(),
+                epsilon=__eigenvalue_epsilon__,
+            )
+            for phenotype_idx in range(self.num_phenotypes)
+        ]
+        phenotype_covs_init = [
+            pos_def_matrix_cleanup(
+                self.phenotype_weight_covs[phenotype_idx][
+                    UNIFIED_STATE_SPACE_DIMENSION
+                    * previous_observation_time : UNIFIED_STATE_SPACE_DIMENSION
+                    * (previous_observation_time + 1),
+                    UNIFIED_STATE_SPACE_DIMENSION
+                    * previous_observation_time : UNIFIED_STATE_SPACE_DIMENSION
+                    * (previous_observation_time + 1),
+                ].todense(),
+                epsilon=__eigenvalue_epsilon__,
+            )
+            for phenotype_idx in range(self.num_phenotypes)
+        ]
+        for ensemble_phenotype_idx in range(self.num_phenotypes):
+            # iterate over each member of a phenotype's ensemble
+            for ensemble_idx in range(2 * UNIFIED_STATE_SPACE_DIMENSION + 1):
+                per_phenotype_log_weight = np.zeros(self.num_phenotypes, dtype=np.float64)
+                per_phenotype_log_weight_initial = np.zeros(self.num_phenotypes, dtype=np.float64)
+                # iterate over phenotypes
+                for phenotype_idx in range(self.num_phenotypes):
+                    # log-probabilities for the initial (x_{k-1}) state of the trajectory
+                    initial_state_vec = (
+                        self.ensemble_macrostate[
+                            ensemble_phenotype_idx, ensemble_idx, previous_observation_time, :
+                        ]
+                        - self.phenotype_weight_means[phenotype_idx, previous_observation_time, :]
+                    )
+                    try:
+                        temp = np.linalg.lstsq(
+                            phenotype_covs_init[phenotype_idx],
+                            initial_state_vec,
+                        )[0]
+                    except LinAlgError:
+                        temp = (
+                            scipy.linalg.pinvh(
+                                phenotype_covs_init[phenotype_idx], return_rank=False
+                            )
+                            @ initial_state_vec
+                        )
+                    # noinspection PyCallingNonCallable
+                    per_phenotype_log_weight_initial[phenotype_idx] = -0.5 * (
+                        initial_state_vec @ temp
+                        + abslogdet(phenotype_covs_init[phenotype_idx])
+                        + np.log(2 * np.pi) * UNIFIED_STATE_SPACE_DIMENSION
+                    )
+
+                    # log-probabilities for the trajectory from the initial state, x_{k-1}, to x_{k+l}
+                    trajectory_vec = self.ensemble_macrostate[
+                        ensemble_phenotype_idx,
+                        ensemble_idx,
+                        previous_observation_time : observation_time + 1,
+                        :,
+                    ].reshape(-1) - self.phenotype_weight_means[
+                        phenotype_idx, previous_observation_time : observation_time + 1, :
+                    ].reshape(
+                        -1
+                    )
+                    try:
+                        temp = np.linalg.lstsq(
+                            phenotype_covs_trajectory[phenotype_idx],
+                            trajectory_vec,
+                        )[0]
+                    except LinAlgError:
+                        temp = (
+                            scipy.linalg.pinvh(
+                                phenotype_covs_trajectory[phenotype_idx], return_rank=False
+                            )
+                            @ trajectory_vec
+                        )
+                    # noinspection PyCallingNonCallable
+                    per_phenotype_log_weight[phenotype_idx] = -0.5 * (
+                        trajectory_vec @ temp
+                        + abslogdet(phenotype_covs_trajectory[phenotype_idx])
+                        + np.log(2 * np.pi) * UNIFIED_STATE_SPACE_DIMENSION
+                    )
+
+                # compute weights with normalization
+                log_weights[ensemble_phenotype_idx, ensemble_idx] = (
+                    per_phenotype_log_weight[ensemble_phenotype_idx]
+                    - per_phenotype_log_weight_initial[ensemble_phenotype_idx]
+                    + logsumexp(
+                        per_phenotype_log_weight_initial
+                        + self.log_phenotype_distribution_timeseries[:, 0]
+                    )
+                    - logsumexp(
+                        per_phenotype_log_weight + self.log_phenotype_distribution_timeseries[:, 0]
+                    )
+                )
+
+            # normalize weights in the ensemble
+            log_weights[ensemble_phenotype_idx, :] -= logsumexp(
+                log_weights[ensemble_phenotype_idx, :]
+            )
+
+            # we don't want to weights to become excessively small as this can give a singular estimate
+            # (can happen when one trajectory looks like a _really_ good match) so we cap and renormalize
+            log_weights[ensemble_phenotype_idx, :] = np.clip(
+                log_weights[ensemble_phenotype_idx, :], -2 * np.log(self.ensemble_size), 0.0
+            )
+            log_weights[ensemble_phenotype_idx, :] -= logsumexp(
+                log_weights[ensemble_phenotype_idx, :]
+            )
+
+        return log_weights
 
     def plot_state_vars(self, TIME_SPAN, vp_trajectory, cycle, SAMPLE_INTERVAL, FILE_PREFIX):
         """
