@@ -368,15 +368,6 @@ class PhenotypeKFAnCockrell:
             v = observation - (H @ mu)
             S = H @ P @ H.T + R
 
-            # TODO: figure out why pycharm thinks that np.log is not a function, but a boolean. Not python thinking
-            #  that, pycharm.
-            # noinspection PyCallingNonCallable
-            self.log_phenotype_distribution[phenotype_idx] -= 0.5 * (
-                v.T @ scipy.linalg.pinvh(S) @ v
-                + abslogdet(S)
-                + np.log(2 * np.pi) * len(observation_types)
-            )
-
             K = P @ H.T @ np.linalg.pinv(S)
 
             # Note for future readers: mu[:] and P[:,:] access the the contents of the original arrays that mu and P
@@ -477,25 +468,14 @@ class PhenotypeKFAnCockrell:
     def compute_weights(self, observation_time, previous_observation_time):
         from phkf_ac.util import pos_def_matrix_cleanup
 
+        # TODO: unscented weights?
         log_weights = np.zeros(
             (self.num_phenotypes, self.ensemble_size),
             dtype=np.float64,
         )
-        # TODO: unscented weights?
-        phenotype_covs_trajectory = [
-            pos_def_matrix_cleanup(
-                self.phenotype_weight_covs[phenotype_idx][
-                    UNIFIED_STATE_SPACE_DIMENSION
-                    * previous_observation_time : UNIFIED_STATE_SPACE_DIMENSION
-                    * (observation_time + 1),
-                    UNIFIED_STATE_SPACE_DIMENSION
-                    * previous_observation_time : UNIFIED_STATE_SPACE_DIMENSION
-                    * (observation_time + 1),
-                ].todense(),
-                epsilon=__eigenvalue_epsilon__,
-            )
-            for phenotype_idx in range(self.num_phenotypes)
-        ]
+
+        # compute log weights for the initial condition
+
         phenotype_covs_init = [
             pos_def_matrix_cleanup(
                 self.phenotype_weight_covs[phenotype_idx][
@@ -510,6 +490,65 @@ class PhenotypeKFAnCockrell:
             )
             for phenotype_idx in range(self.num_phenotypes)
         ]
+
+        # compute difference between all ensemble members for all phenotypes at previous_observation_time
+        # and the per-phenotype mean weights.
+        # We start with
+        # self.ensemble_macrostate[:, :, previous_observation_time, :] with form
+        # [ #phenotype-ensembles, #ensemble members, *, dim_states ]
+        # and
+        # self.phenotype_weight_means[:, previous_observation_time, :] with form
+        # [ #phenotypes, *, dim_states ]
+        # want
+        # [ #phenotype-ensembles, #ensemble members, #phenotypes, dim_states ]
+
+        initial_state_vec = (
+            np.broadcast_to(
+                self.ensemble_macrostate[:, :, previous_observation_time, :][:, :, np.newaxis, :],
+                (
+                    self.ensemble_macrostate.shape[0],
+                    self.ensemble_macrostate[1],
+                    self.num_phenotypes,
+                    self.ensemble_macrostate[3],
+                ),
+            )
+            - self.phenotype_weight_means[:, previous_observation_time, :][np.newaxis,np.newaxis,:,:]
+        )
+        sigma_inv_times_x_minus_mu = np.zeros((
+                    self.ensemble_macrostate.shape[0],
+                    self.ensemble_macrostate[1],
+                    self.num_phenotypes,
+                    self.ensemble_macrostate[3],
+                ))
+        for phenotype_idx in range(self.num_phenotypes):
+            sigma_inv_times_x_minus_mu[:,:,phenotype_idx,:] = np.linalg.lstsq(
+                phenotype_covs_init[phenotype_idx],
+                initial_state_vec.T,
+            )[0].T
+
+        log_weights_init
+        per_phenotype_log_weight[phenotype_idx] = -0.5 * (
+                trajectory_vec @ temp
+                + abslogdet(phenotype_covs_trajectory[phenotype_idx])
+                + np.log(2 * np.pi) * UNIFIED_STATE_SPACE_DIMENSION
+        )
+
+
+        phenotype_covs_trajectory = [
+            pos_def_matrix_cleanup(
+                self.phenotype_weight_covs[phenotype_idx][
+                UNIFIED_STATE_SPACE_DIMENSION
+                * previous_observation_time: UNIFIED_STATE_SPACE_DIMENSION
+                                             * (observation_time + 1),
+                UNIFIED_STATE_SPACE_DIMENSION
+                * previous_observation_time: UNIFIED_STATE_SPACE_DIMENSION
+                                             * (observation_time + 1),
+                ].todense(),
+                epsilon=__eigenvalue_epsilon__,
+            )
+            for phenotype_idx in range(self.num_phenotypes)
+        ]
+
         for ensemble_phenotype_idx in range(self.num_phenotypes):
             # iterate over each member of a phenotype's ensemble
             for ensemble_idx in range(2 * UNIFIED_STATE_SPACE_DIMENSION + 1):
